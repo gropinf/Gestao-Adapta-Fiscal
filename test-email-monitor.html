@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste Email Monitor - Debug</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #10B981; }
+        h2 { color: #059669; margin-top: 0; }
+        button {
+            background: #10B981;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover { background: #059669; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .copy-btn {
+            background: #3B82F6;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+        .copy-btn:hover { background: #2563EB; }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        label {
+            font-weight: 600;
+            color: #374151;
+            display: block;
+            margin-top: 10px;
+        }
+        .result {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { background: #d1fae5; color: #065f46; }
+        .error { background: #fee2e2; color: #991b1b; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Teste Email Monitor - Debug de Campos</h1>
+
+    <div class="section">
+        <h2>📊 1. Listar Monitores</h2>
+        <p>Busca todos os monitores cadastrados e mostra os valores dos campos</p>
+        <button onclick="listarMonitores()">Listar Monitores</button>
+        <button class="copy-btn" onclick="copiarResultado('result-list')">Copiar Resultado</button>
+        <div id="result-list" class="result"></div>
+    </div>
+
+    <div class="section">
+        <h2>✏️ 2. Atualizar Monitor (Teste)</h2>
+        <p>Atualiza um monitor e verifica se os campos são salvos</p>
+        
+        <label>ID do Monitor:</label>
+        <input type="text" id="update-id" placeholder="Cole o ID do monitor aqui">
+        
+        <div class="grid">
+            <div>
+                <label>Monitorar A Partir De:</label>
+                <input type="date" id="update-date">
+            </div>
+            <div>
+                <label>Intervalo (minutos):</label>
+                <input type="number" id="update-interval" value="30" min="5" max="1440">
+            </div>
+        </div>
+        
+        <button onclick="atualizarMonitor()">Atualizar e Testar</button>
+        <button class="copy-btn" onclick="copiarResultado('result-update')">Copiar Resultado</button>
+        <div id="result-update" class="result"></div>
+    </div>
+
+    <div class="section">
+        <h2>🔍 3. Buscar Monitor Específico</h2>
+        <p>Busca um monitor pelo ID para verificar os valores salvos</p>
+        
+        <label>ID do Monitor:</label>
+        <input type="text" id="get-id" placeholder="Cole o ID do monitor aqui">
+        
+        <button onclick="buscarMonitor()">Buscar Monitor</button>
+        <button class="copy-btn" onclick="copiarResultado('result-get')">Copiar Resultado</button>
+        <div id="result-get" class="result"></div>
+    </div>
+
+    <script>
+        const API_URL = '';
+        let token = null;
+
+        // Pegar token do localStorage
+        function getToken() {
+            try {
+                const authStorage = localStorage.getItem('auth-storage');
+                if (authStorage) {
+                    const parsed = JSON.parse(authStorage);
+                    token = parsed.state?.token;
+                }
+            } catch (e) {
+                console.error('Erro ao pegar token:', e);
+            }
+            return token;
+        }
+
+        async function listarMonitores() {
+            const resultDiv = document.getElementById('result-list');
+            resultDiv.textContent = '⏳ Carregando...';
+            
+            try {
+                const token = getToken();
+                if (!token) {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Token não encontrado. Faça login primeiro.';
+                    return;
+                }
+
+                const res = await fetch('/api/email-monitors', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+                }
+
+                const monitors = await res.json();
+                
+                resultDiv.className = 'result success';
+                resultDiv.textContent = `✅ Encontrados ${monitors.length} monitor(es):\n\n` +
+                    JSON.stringify(monitors, null, 2);
+                
+                // Auto-preencher ID se houver monitores
+                if (monitors.length > 0) {
+                    document.getElementById('update-id').value = monitors[0].id;
+                    document.getElementById('get-id').value = monitors[0].id;
+                }
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = `❌ Erro: ${error.message}`;
+            }
+        }
+
+        async function atualizarMonitor() {
+            const resultDiv = document.getElementById('result-update');
+            const id = document.getElementById('update-id').value;
+            const monitorSince = document.getElementById('update-date').value;
+            const checkIntervalMinutes = parseInt(document.getElementById('update-interval').value);
+            
+            if (!id) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Por favor, informe o ID do monitor';
+                return;
+            }
+
+            resultDiv.textContent = '⏳ Atualizando...';
+            
+            try {
+                const token = getToken();
+                const payload = {
+                    monitorSince: monitorSince || null,
+                    checkIntervalMinutes: checkIntervalMinutes,
+                };
+
+                console.log('[Debug] Payload sendo enviado:', payload);
+                
+                const res = await fetch(`/api/email-monitors/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+                }
+
+                const updated = await res.json();
+                
+                resultDiv.className = 'result success';
+                resultDiv.textContent = `✅ Monitor atualizado!\n\n` +
+                    `VALORES SALVOS:\n` +
+                    `- monitorSince: ${updated.monitorSince || 'NULL'}\n` +
+                    `- checkIntervalMinutes: ${updated.checkIntervalMinutes}\n\n` +
+                    `RESPOSTA COMPLETA:\n` +
+                    JSON.stringify(updated, null, 2);
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = `❌ Erro: ${error.message}`;
+            }
+        }
+
+        async function buscarMonitor() {
+            const resultDiv = document.getElementById('result-get');
+            const id = document.getElementById('get-id').value;
+            
+            if (!id) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Por favor, informe o ID do monitor';
+                return;
+            }
+
+            resultDiv.textContent = '⏳ Buscando...';
+            
+            try {
+                const token = getToken();
+                
+                const res = await fetch(`/api/email-monitors/${id}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+                }
+
+                const monitor = await res.json();
+                
+                resultDiv.className = 'result success';
+                resultDiv.textContent = `✅ Monitor encontrado!\n\n` +
+                    `CAMPOS IMPORTANTES:\n` +
+                    `- Email: ${monitor.email}\n` +
+                    `- Host: ${monitor.host}:${monitor.port}\n` +
+                    `- SSL: ${monitor.ssl}\n` +
+                    `- Ativo: ${monitor.active}\n` +
+                    `- Monitorar Desde: ${monitor.monitorSince || 'NULL (todos os emails)'}\n` +
+                    `- Intervalo: ${monitor.checkIntervalMinutes} minutos\n` +
+                    `- Última Verificação: ${monitor.lastCheckedAt || 'Nunca'}\n` +
+                    `- Último Email ID: ${monitor.lastEmailId || 'Nenhum'}\n\n` +
+                    `RESPOSTA COMPLETA:\n` +
+                    JSON.stringify(monitor, null, 2);
+                
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = `❌ Erro: ${error.message}`;
+            }
+        }
+
+        function copiarResultado(elementId) {
+            const element = document.getElementById(elementId);
+            const text = element.textContent;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✅ Copiado!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            });
+        }
+
+        // Auto-carregar ao abrir
+        window.addEventListener('load', () => {
+            listarMonitores();
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+

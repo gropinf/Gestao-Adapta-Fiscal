@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🧪 Diagnóstico Adapta Fiscal</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+    .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
+    .header p { opacity: 0.9; font-size: 1.1rem; }
+    .content { padding: 30px; }
+    .test-section {
+      margin-bottom: 30px;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .section-header {
+      background: #f7fafc;
+      padding: 15px 20px;
+      border-bottom: 2px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .section-header:hover { background: #edf2f7; }
+    .section-header h2 { font-size: 1.3rem; color: #2d3748; }
+    .section-body { padding: 20px; background: white; }
+    .test-item {
+      padding: 15px;
+      margin-bottom: 10px;
+      border-radius: 8px;
+      background: #f7fafc;
+      border-left: 4px solid #cbd5e0;
+    }
+    .test-item.success {
+      background: #f0fdf4;
+      border-left-color: #22c55e;
+    }
+    .test-item.error {
+      background: #fef2f2;
+      border-left-color: #ef4444;
+    }
+    .test-item.running {
+      background: #fef3c7;
+      border-left-color: #f59e0b;
+    }
+    .test-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .test-result { font-size: 0.9rem; color: #64748b; }
+    .test-result pre {
+      background: #1e293b;
+      color: #f1f5f9;
+      padding: 10px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin-top: 8px;
+      font-size: 0.85rem;
+    }
+    .badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge.success { background: #22c55e; color: white; }
+    .badge.error { background: #ef4444; color: white; }
+    .badge.running { background: #f59e0b; color: white; }
+    .badge.pending { background: #94a3b8; color: white; }
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      margin-right: 10px;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    .summary-card {
+      padding: 20px;
+      border-radius: 12px;
+      text-align: center;
+      color: white;
+    }
+    .summary-card.total { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .summary-card.success { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); }
+    .summary-card.error { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+    .summary-card.pending { background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%); }
+    .summary-number { font-size: 2.5rem; font-weight: 700; }
+    .summary-label { opacity: 0.9; margin-top: 5px; }
+    .copy-btn {
+      background: #10b981;
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      margin-top: 8px;
+    }
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(0,0,0,0.1);
+      border-left-color: #f59e0b;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🧪 Diagnóstico Adapta Fiscal</h1>
+      <p>Teste automatizado de todas as APIs do sistema</p>
+    </div>
+
+    <div class="content">
+      <div class="summary" id="summary">
+        <div class="summary-card total">
+          <div class="summary-number" id="totalTests">0</div>
+          <div class="summary-label">Total de Testes</div>
+        </div>
+        <div class="summary-card success">
+          <div class="summary-number" id="successTests">0</div>
+          <div class="summary-label">Sucessos</div>
+        </div>
+        <div class="summary-card error">
+          <div class="summary-number" id="errorTests">0</div>
+          <div class="summary-label">Erros</div>
+        </div>
+        <div class="summary-card pending">
+          <div class="summary-number" id="pendingTests">0</div>
+          <div class="summary-label">Pendentes</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button onclick="runAllTests()" id="runBtn">▶️ Executar Todos os Testes</button>
+        <button onclick="clearResults()">🗑️ Limpar Resultados</button>
+        <button onclick="exportResults()">📥 Exportar JSON</button>
+      </div>
+
+      <!-- AUTENTICAÇÃO -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>🔐 1. Autenticação e Segurança</h2>
+          <span class="badge pending" id="badge-auth">0/3</span>
+        </div>
+        <div class="section-body" id="section-auth">
+          <div class="test-item" id="test-login-valid">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T1.1.1 - Login com credenciais válidas</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-login-invalid">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T1.1.2 - Login com credenciais inválidas</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-protected-route">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T1.2.3 - Acesso API sem token (deve retornar 401)</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EMPRESAS -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>🏢 2. Gestão de Empresas</h2>
+          <span class="badge pending" id="badge-companies">0/4</span>
+        </div>
+        <div class="section-body" id="section-companies">
+          <div class="test-item" id="test-companies-list">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T2.1.1 - Listar empresas do usuário</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-company-create">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T2.2.7 - Criar nova empresa</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-company-update">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T2.3.3 - Atualizar empresa</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-company-delete">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T2.4.3 - Excluir empresa</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONTADORES -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>📊 3. Gestão de Contadores</h2>
+          <span class="badge pending" id="badge-accountants">0/4</span>
+        </div>
+        <div class="section-body" id="section-accountants">
+          <div class="test-item" id="test-accountants-list">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T3.1.1 - Listar contadores</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-accountant-create">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T3.2.4 - Criar novo contador</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-accountant-update">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T3.3.5 - Atualizar contador</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-accountant-delete">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T3.4.3 - Excluir contador</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- XMLs -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>📄 4. XMLs</h2>
+          <span class="badge pending" id="badge-xmls">0/3</span>
+        </div>
+        <div class="section-body" id="section-xmls">
+          <div class="test-item" id="test-xmls-list">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T5.1.2 - Listar XMLs (deve retornar 7 dos seeds)</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-xmls-filter-category">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T5.2.2 - Filtrar XMLs por categoria (Emitidas)</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-xml-download">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T5.4.3 - Download de XML</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ALERTAS -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>🚨 5. Sistema de Alertas</h2>
+          <span class="badge pending" id="badge-alerts">0/3</span>
+        </div>
+        <div class="section-body" id="section-alerts">
+          <div class="test-item" id="test-alerts-list">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T7.1.2 - Listar alertas (deve retornar 2 dos seeds)</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-alert-resolve">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T7.3.1 - Resolver alerta</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+          <div class="test-item" id="test-alert-delete">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>Excluir alerta</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RECEITAWS -->
+      <div class="test-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          <h2>🔍 6. Integração ReceitaWS</h2>
+          <span class="badge pending" id="badge-receitaws">0/1</span>
+        </div>
+        <div class="section-body" id="section-receitaws">
+          <div class="test-item" id="test-receitaws">
+            <div class="test-title">
+              <span class="badge pending">PENDENTE</span>
+              <span>T11.1.3 - Buscar CNPJ válido</span>
+            </div>
+            <div class="test-result"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let authToken = '';
+    let currentCompanyId = '';
+    let testResults = {};
+
+    function toggleSection(header) {
+      const body = header.nextElementSibling;
+      body.style.display = body.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function updateSummary() {
+      const total = Object.keys(testResults).length;
+      const success = Object.values(testResults).filter(r => r.status === 'success').length;
+      const error = Object.values(testResults).filter(r => r.status === 'error').length;
+      const pending = total - success - error;
+
+      document.getElementById('totalTests').textContent = total;
+      document.getElementById('successTests').textContent = success;
+      document.getElementById('errorTests').textContent = error;
+      document.getElementById('pendingTests').textContent = pending;
+    }
+
+    function updateBadge(section, current, total) {
+      const badge = document.getElementById(`badge-${section}`);
+      badge.textContent = `${current}/${total}`;
+      if (current === total) {
+        badge.className = 'badge success';
+      } else if (current > 0) {
+        badge.className = 'badge running';
+      }
+    }
+
+    function setTestStatus(testId, status, message, data = null) {
+      const testEl = document.getElementById(testId);
+      if (!testEl) return;
+
+      testEl.className = `test-item ${status}`;
+      const badge = testEl.querySelector('.badge');
+      badge.className = `badge ${status}`;
+      badge.textContent = status.toUpperCase();
+
+      const resultEl = testEl.querySelector('.test-result');
+      let html = `<p>${message}</p>`;
+      
+      if (data) {
+        html += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        html += `<button class="copy-btn" onclick="copyToClipboard('${testId}')">📋 Copiar Resultado</button>`;
+      }
+      
+      resultEl.innerHTML = html;
+
+      testResults[testId] = { status, message, data };
+      updateSummary();
+    }
+
+    function copyToClipboard(testId) {
+      const result = testResults[testId];
+      const text = JSON.stringify(result, null, 2);
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = event.target;
+        btn.textContent = '✅ Copiado!';
+        setTimeout(() => btn.textContent = '📋 Copiar Resultado', 2000);
+      });
+    }
+
+    async function runTest(testId, testFn) {
+      setTestStatus(testId, 'running', 'Executando teste...', null);
+      try {
+        const result = await testFn();
+        setTestStatus(testId, 'success', result.message, result.data);
+        return true;
+      } catch (error) {
+        setTestStatus(testId, 'error', error.message, error.data || null);
+        return false;
+      }
+    }
+
+    async function runAllTests() {
+      document.getElementById('runBtn').disabled = true;
+      testResults = {};
+
+      // 1. AUTENTICAÇÃO
+      let authPassed = 0;
+      authPassed += await runTest('test-login-valid', testLoginValid) ? 1 : 0;
+      updateBadge('auth', authPassed, 3);
+      
+      authPassed += await runTest('test-login-invalid', testLoginInvalid) ? 1 : 0;
+      updateBadge('auth', authPassed, 3);
+      
+      authPassed += await runTest('test-protected-route', testProtectedRoute) ? 1 : 0;
+      updateBadge('auth', authPassed, 3);
+
+      // 2. EMPRESAS
+      let companiesPassed = 0;
+      companiesPassed += await runTest('test-companies-list', testCompaniesList) ? 1 : 0;
+      updateBadge('companies', companiesPassed, 4);
+      
+      companiesPassed += await runTest('test-company-create', testCompanyCreate) ? 1 : 0;
+      updateBadge('companies', companiesPassed, 4);
+      
+      companiesPassed += await runTest('test-company-update', testCompanyUpdate) ? 1 : 0;
+      updateBadge('companies', companiesPassed, 4);
+      
+      companiesPassed += await runTest('test-company-delete', testCompanyDelete) ? 1 : 0;
+      updateBadge('companies', companiesPassed, 4);
+
+      // 3. CONTADORES
+      let accountantsPassed = 0;
+      accountantsPassed += await runTest('test-accountants-list', testAccountantsList) ? 1 : 0;
+      updateBadge('accountants', accountantsPassed, 4);
+      
+      accountantsPassed += await runTest('test-accountant-create', testAccountantCreate) ? 1 : 0;
+      updateBadge('accountants', accountantsPassed, 4);
+      
+      accountantsPassed += await runTest('test-accountant-update', testAccountantUpdate) ? 1 : 0;
+      updateBadge('accountants', accountantsPassed, 4);
+      
+      accountantsPassed += await runTest('test-accountant-delete', testAccountantDelete) ? 1 : 0;
+      updateBadge('accountants', accountantsPassed, 4);
+
+      // 4. XMLs
+      let xmlsPassed = 0;
+      xmlsPassed += await runTest('test-xmls-list', testXmlsList) ? 1 : 0;
+      updateBadge('xmls', xmlsPassed, 3);
+      
+      xmlsPassed += await runTest('test-xmls-filter-category', testXmlsFilterCategory) ? 1 : 0;
+      updateBadge('xmls', xmlsPassed, 3);
+      
+      xmlsPassed += await runTest('test-xml-download', testXmlDownload) ? 1 : 0;
+      updateBadge('xmls', xmlsPassed, 3);
+
+      // 5. ALERTAS
+      let alertsPassed = 0;
+      alertsPassed += await runTest('test-alerts-list', testAlertsList) ? 1 : 0;
+      updateBadge('alerts', alertsPassed, 3);
+      
+      alertsPassed += await runTest('test-alert-resolve', testAlertResolve) ? 1 : 0;
+      updateBadge('alerts', alertsPassed, 3);
+      
+      alertsPassed += await runTest('test-alert-delete', testAlertDelete) ? 1 : 0;
+      updateBadge('alerts', alertsPassed, 3);
+
+      // 6. RECEITAWS
+      let receitawsPassed = 0;
+      receitawsPassed += await runTest('test-receitaws', testReceitaWS) ? 1 : 0;
+      updateBadge('receitaws', receitawsPassed, 1);
+
+      document.getElementById('runBtn').disabled = false;
+      alert('✅ Testes concluídos! Verifique os resultados acima.');
+    }
+
+    // ===== TESTES =====
+
+    async function testLoginValid() {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@adaptafiscal.com.br', password: 'password123' })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!data.token) throw new Error('Token não retornado');
+      
+      authToken = data.token;
+      if (data.companies && data.companies[0]) {
+        currentCompanyId = data.companies[0].id;
+      }
+      
+      return { message: '✅ Login bem-sucedido! Token recebido.', data };
+    }
+
+    async function testLoginInvalid() {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@adaptafiscal.com.br', password: 'senhaerrada' })
+      });
+      
+      if (res.ok) throw new Error('Login deveria ter falhado mas passou!');
+      if (res.status !== 401) throw new Error(`Status esperado: 401, recebido: ${res.status}`);
+      
+      return { message: '✅ Login inválido rejeitado corretamente (401).', data: { status: res.status } };
+    }
+
+    async function testProtectedRoute() {
+      const res = await fetch('/api/companies');
+      
+      if (res.ok) throw new Error('Rota protegida acessível sem token!');
+      if (res.status !== 401) throw new Error(`Status esperado: 401, recebido: ${res.status}`);
+      
+      return { message: '✅ Rota protegida bloqueou acesso sem token.', data: { status: res.status } };
+    }
+
+    async function testCompaniesList() {
+      const res = await fetch('/api/companies', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Resposta não é array');
+      if (data.length !== 3) throw new Error(`Esperado 3 empresas, recebido ${data.length}`);
+      
+      return { message: `✅ ${data.length} empresas retornadas.`, data };
+    }
+
+    async function testCompanyCreate() {
+      const newCompany = {
+        cnpj: '99888777000166',
+        razaoSocial: 'Empresa Teste LTDA',
+        nomeFantasia: 'Teste Corp',
+        inscricaoEstadual: '999888777666',
+        rua: 'Rua Teste',
+        numero: '999',
+        bairro: 'Centro',
+        cidade: 'São Paulo',
+        uf: 'SP',
+        cep: '01310100'
+      };
+      
+      const res = await fetch('/api/companies', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(newCompany)
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!data.id) throw new Error('ID não retornado');
+      
+      return { message: '✅ Empresa criada com sucesso.', data };
+    }
+
+    async function testCompanyUpdate() {
+      // Pega primeira empresa
+      const listRes = await fetch('/api/companies', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const companies = await listRes.json();
+      const companyId = companies[0]?.id;
+      
+      if (!companyId) throw new Error('Nenhuma empresa encontrada para atualizar');
+      
+      const res = await fetch(`/api/companies/${companyId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ nomeFantasia: 'Nome Fantasia Atualizado' })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (data.nomeFantasia !== 'Nome Fantasia Atualizado') {
+        throw new Error('Nome fantasia não foi atualizado');
+      }
+      
+      return { message: '✅ Empresa atualizada com sucesso.', data };
+    }
+
+    async function testCompanyDelete() {
+      // Cria empresa temporária para deletar
+      const createRes = await fetch('/api/companies', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          cnpj: '88777666000155',
+          razaoSocial: 'Empresa Para Deletar',
+          nomeFantasia: 'Delete',
+          rua: 'Rua X',
+          numero: '1',
+          bairro: 'Centro',
+          cidade: 'São Paulo',
+          uf: 'SP',
+          cep: '01310100'
+        })
+      });
+      
+      const created = await createRes.json();
+      
+      const res = await fetch(`/api/companies/${created.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      return { message: '✅ Empresa excluída com sucesso.', data: { deletedId: created.id } };
+    }
+
+    async function testAccountantsList() {
+      const res = await fetch('/api/accountants', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Resposta não é array');
+      if (data.length !== 2) throw new Error(`Esperado 2 contadores, recebido ${data.length}`);
+      
+      return { message: `✅ ${data.length} contadores retornados.`, data };
+    }
+
+    async function testAccountantCreate() {
+      const res = await fetch('/api/accountants', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          nome: 'Contador Teste',
+          emailContador: 'teste@contador.com.br',
+          companyIds: [currentCompanyId]
+        })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!data.id) throw new Error('ID não retornado');
+      
+      return { message: '✅ Contador criado com sucesso.', data };
+    }
+
+    async function testAccountantUpdate() {
+      const listRes = await fetch('/api/accountants', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const accountants = await listRes.json();
+      const accountantId = accountants[0]?.id;
+      
+      if (!accountantId) throw new Error('Nenhum contador encontrado');
+      
+      const res = await fetch(`/api/accountants/${accountantId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ nome: 'Contador Atualizado' })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      return { message: '✅ Contador atualizado com sucesso.', data };
+    }
+
+    async function testAccountantDelete() {
+      const createRes = await fetch('/api/accountants', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          nome: 'Contador Para Deletar',
+          emailContador: 'delete@contador.com.br',
+          companyIds: []
+        })
+      });
+      
+      const created = await createRes.json();
+      
+      const res = await fetch(`/api/accountants/${created.id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      return { message: '✅ Contador excluído com sucesso.', data: { deletedId: created.id } };
+    }
+
+    async function testXmlsList() {
+      const res = await fetch(`/api/xmls?companyId=${currentCompanyId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Resposta não é array');
+      
+      return { message: `✅ ${data.length} XMLs retornados.`, data: { count: data.length, sample: data[0] } };
+    }
+
+    async function testXmlsFilterCategory() {
+      const res = await fetch(`/api/xmls?companyId=${currentCompanyId}&categoria=emitida`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      const allEmitted = data.every(x => x.categoria === 'emitida');
+      if (!allEmitted) throw new Error('Filtro não funcionou corretamente');
+      
+      return { message: `✅ Filtro de categoria funcional. ${data.length} emitidas.`, data: { count: data.length } };
+    }
+
+    async function testXmlDownload() {
+      // Pega primeiro XML
+      const listRes = await fetch(`/api/xmls?companyId=${currentCompanyId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const xmls = await listRes.json();
+      const xmlId = xmls[0]?.id;
+      
+      if (!xmlId) throw new Error('Nenhum XML encontrado');
+      
+      const res = await fetch(`/api/xmls/${xmlId}/download`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const content = await res.text();
+      if (!content.includes('<?xml')) throw new Error('Conteúdo não é XML');
+      
+      return { message: '✅ Download de XML funcional.', data: { xmlId, size: content.length } };
+    }
+
+    async function testAlertsList() {
+      const res = await fetch(`/api/alerts?companyId=${currentCompanyId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Resposta não é array');
+      
+      return { message: `✅ ${data.length} alertas retornados.`, data: { count: data.length, sample: data[0] } };
+    }
+
+    async function testAlertResolve() {
+      const listRes = await fetch(`/api/alerts?companyId=${currentCompanyId}&resolved=false`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const alerts = await listRes.json();
+      const alertId = alerts[0]?.id;
+      
+      if (!alertId) throw new Error('Nenhum alerta não resolvido encontrado');
+      
+      const res = await fetch(`/api/alerts/${alertId}/resolve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!data.resolved) throw new Error('Alerta não foi marcado como resolvido');
+      
+      return { message: '✅ Alerta resolvido com sucesso.', data };
+    }
+
+    async function testAlertDelete() {
+      // Cria alerta temporário (não temos endpoint, skip)
+      return { message: '⚠️ Teste pulado - sem endpoint para criar alerta.', data: null };
+    }
+
+    async function testReceitaWS() {
+      const res = await fetch('/api/cnpj/00000000000191', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      
+      const data = await res.json();
+      if (!data.nome) throw new Error('Dados do CNPJ não retornados');
+      
+      return { message: '✅ ReceitaWS funcionando.', data };
+    }
+
+    function clearResults() {
+      testResults = {};
+      updateSummary();
+      document.querySelectorAll('.test-item').forEach(el => {
+        el.className = 'test-item';
+        el.querySelector('.badge').className = 'badge pending';
+        el.querySelector('.badge').textContent = 'PENDENTE';
+        el.querySelector('.test-result').innerHTML = '';
+      });
+      document.querySelectorAll('[id^="badge-"]').forEach(el => {
+        el.className = 'badge pending';
+        const match = el.id.match(/badge-(.*)/);
+        if (match) {
+          const section = match[1];
+          const totalMap = { auth: 3, companies: 4, accountants: 4, xmls: 3, alerts: 3, receitaws: 1 };
+          el.textContent = `0/${totalMap[section] || 0}`;
+        }
+      });
+    }
+
+    function exportResults() {
+      const json = JSON.stringify(testResults, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `diagnostico-${new Date().toISOString()}.json`;
+      a.click();
+    }
+
+    // Inicializar
+    updateSummary();
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

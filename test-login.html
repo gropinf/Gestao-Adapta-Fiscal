@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Login - Adapta Fiscal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 900px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .credentials-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .credentials-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+        
+        .user-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .user-card:nth-child(2) {
+            border-left-color: #48bb78;
+        }
+        
+        .user-card:nth-child(3) {
+            border-left-color: #ed8936;
+        }
+        
+        .user-card h3 {
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .user-card p {
+            color: #666;
+            font-size: 13px;
+            margin: 3px 0;
+        }
+        
+        .user-card code {
+            background: #f1f1f1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #d63384;
+        }
+        
+        .test-section {
+            background: #fff;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 2px solid #e2e8f0;
+        }
+        
+        .test-section h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            background: #667eea;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+        
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-copy {
+            background: #48bb78;
+        }
+        
+        .btn-copy:hover {
+            background: #38a169;
+        }
+        
+        .btn-copy.copied {
+            background: #38a169;
+        }
+        
+        .result {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 400px;
+            overflow-y: auto;
+            display: none;
+        }
+        
+        .result.success {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
+            display: block;
+        }
+        
+        .result.error {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            color: #721c24;
+            display: block;
+        }
+        
+        .quick-login {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .quick-btn {
+            flex: 1;
+            min-width: 150px;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 10px;
+            color: #667eea;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Teste de Login - Adapta Fiscal</h1>
+        <p class="subtitle">Teste as credenciais dos usuários do sistema</p>
+        
+        <!-- Credenciais Disponíveis -->
+        <div class="credentials-section">
+            <div class="credentials-title">👥 Credenciais Disponíveis:</div>
+            
+            <div class="user-card">
+                <h3>1️⃣ Administrador</h3>
+                <p>Email: <code>admin@adaptafiscal.com.br</code></p>
+                <p>Senha: <code>password123</code></p>
+                <p>Role: <code>admin</code></p>
+            </div>
+            
+            <div class="user-card">
+                <h3>2️⃣ Cliente</h3>
+                <p>Email: <code>cliente@adaptafiscal.com.br</code></p>
+                <p>Senha: <code>password123</code></p>
+                <p>Role: <code>cliente</code></p>
+            </div>
+            
+            <div class="user-card">
+                <h3>3️⃣ Contador</h3>
+                <p>Email: <code>contador@adaptafiscal.com.br</code></p>
+                <p>Senha: <code>password123</code></p>
+                <p>Role: <code>contabilidade</code></p>
+            </div>
+        </div>
+        
+        <!-- Login Rápido -->
+        <div class="test-section">
+            <h2>⚡ Login Rápido</h2>
+            <div class="quick-login">
+                <button class="btn quick-btn" onclick="quickLogin('admin')">Login como Admin</button>
+                <button class="btn quick-btn" onclick="quickLogin('cliente')">Login como Cliente</button>
+                <button class="btn quick-btn" onclick="quickLogin('contador')">Login como Contador</button>
+            </div>
+        </div>
+        
+        <!-- Teste Manual -->
+        <div class="test-section">
+            <h2>🧪 Teste Manual</h2>
+            
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" id="email" placeholder="Digite o email">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Senha:</label>
+                <input type="password" id="password" placeholder="Digite a senha">
+            </div>
+            
+            <button class="btn" onclick="testLogin()">🚀 Testar Login</button>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Testando credenciais...</p>
+            </div>
+            
+            <div id="result" class="result"></div>
+            <button class="btn btn-copy" id="copyBtn" style="display: none;" onclick="copyResult()">📋 Copiar Resultado</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+        
+        const credentials = {
+            admin: {
+                email: 'admin@adaptafiscal.com.br',
+                password: 'password123'
+            },
+            cliente: {
+                email: 'cliente@adaptafiscal.com.br',
+                password: 'password123'
+            },
+            contador: {
+                email: 'contador@adaptafiscal.com.br',
+                password: 'password123'
+            }
+        };
+        
+        async function quickLogin(type) {
+            const creds = credentials[type];
+            document.getElementById('email').value = creds.email;
+            document.getElementById('password').value = creds.password;
+            await testLogin();
+        }
+        
+        async function testLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('result');
+            const loading = document.getElementById('loading');
+            const copyBtn = document.getElementById('copyBtn');
+            
+            if (!email || !password) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Por favor, preencha email e senha!';
+                copyBtn.style.display = 'inline-block';
+                return;
+            }
+            
+            // Mostrar loading
+            loading.classList.add('active');
+            resultDiv.style.display = 'none';
+            copyBtn.style.display = 'none';
+            
+            try {
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                loading.classList.remove('active');
+                
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = `✅ LOGIN REALIZADO COM SUCESSO!\n\n` +
+                        `Status: ${response.status} ${response.statusText}\n\n` +
+                        `Resposta:\n${JSON.stringify(data, null, 2)}\n\n` +
+                        `Token: ${data.token}\n\n` +
+                        `Usuário:\n` +
+                        `- ID: ${data.user.id}\n` +
+                        `- Email: ${data.user.email}\n` +
+                        `- Nome: ${data.user.name}\n` +
+                        `- Role: ${data.user.role}\n` +
+                        `- Ativo: ${data.user.active}`;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = `❌ ERRO NO LOGIN\n\n` +
+                        `Status: ${response.status} ${response.statusText}\n\n` +
+                        `Erro:\n${JSON.stringify(data, null, 2)}\n\n` +
+                        `Email testado: ${email}\n` +
+                        `Senha testada: ${password}`;
+                }
+                
+                copyBtn.style.display = 'inline-block';
+                
+            } catch (error) {
+                loading.classList.remove('active');
+                resultDiv.className = 'result error';
+                resultDiv.textContent = `❌ ERRO DE CONEXÃO\n\n` +
+                    `Mensagem: ${error.message}\n\n` +
+                    `Verifique se o servidor está rodando em: ${API_URL}`;
+                copyBtn.style.display = 'inline-block';
+            }
+        }
+        
+        function copyResult() {
+            const resultText = document.getElementById('result').textContent;
+            const copyBtn = document.getElementById('copyBtn');
+            
+            navigator.clipboard.writeText(resultText).then(() => {
+                const originalText = copyBtn.textContent;
+                copyBtn.textContent = '✅ Copiado!';
+                copyBtn.classList.add('copied');
+                
+                setTimeout(() => {
+                    copyBtn.textContent = originalText;
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                alert('Erro ao copiar: ' + err);
+            });
+        }
+        
+        // Permitir Enter para fazer login
+        document.getElementById('password').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                testLogin();
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+

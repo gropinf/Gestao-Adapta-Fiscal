@@ -8,20 +8,44 @@ import Dashboard from "@/pages/dashboard";
 import Clientes from "@/pages/clientes";
 import Contabilidades from "@/pages/contabilidades";
 import Xmls from "@/pages/xmls";
+import XmlDetail from "@/pages/xml-detail";
 import Upload from "@/pages/upload";
+import UploadEventos from "@/pages/upload-eventos";
+import AnaliseSequencia from "@/pages/analise-sequencia";
 import Relatorios from "@/pages/relatorios";
+import EmailMonitorPage from "@/pages/email-monitor";
+import EmailCheckLogs from "@/pages/email-check-logs";
+import EnvioXmlEmail from "@/pages/envio-xml-email";
+import ActivatePage from "@/pages/activate";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
+import RequestAccess from "@/pages/request-access";
+import AuditoriaAcessos from "@/pages/auditoria-acessos";
+import Perfil from "@/pages/perfil";
 import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Login} />
+      <Route path="/activate/:token" component={ActivatePage} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password/:token" component={ResetPassword} />
+      <Route path="/request-access" component={RequestAccess} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/clientes" component={Clientes} />
       <Route path="/contabilidades" component={Contabilidades} />
       <Route path="/xmls" component={Xmls} />
+      <Route path="/xmls/:id" component={XmlDetail} />
       <Route path="/upload" component={Upload} />
+      <Route path="/upload-eventos" component={UploadEventos} />
+      <Route path="/analise-sequencia" component={AnaliseSequencia} />
       <Route path="/relatorios" component={Relatorios} />
+      <Route path="/configuracoes/email-monitor" component={EmailMonitorPage} />
+      <Route path="/configuracoes/email-logs" component={EmailCheckLogs} />
+      <Route path="/envio-xml-email" component={EnvioXmlEmail} />
+      <Route path="/auditoria/acessos" component={AuditoriaAcessos} />
+      <Route path="/perfil" component={Perfil} />
       <Route component={NotFound} />
     </Switch>
   );

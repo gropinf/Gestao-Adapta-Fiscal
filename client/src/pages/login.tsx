@@ -25,7 +25,7 @@ export default function Login() {
       const response = await apiRequest("POST", "/api/auth/login", { email, password });
       const data = await response.json();
       
-      setAuth(data.user, data.token);
+      setAuth(data.user, data.token, data.accessLogId);
       toast({
         title: "Login realizado com sucesso!",
         description: `Bem-vindo, ${data.user.name}`,
@@ -91,13 +91,13 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="h-12 rounded-lg pr-10"
+                  className="h-12 rounded-lg pr-12"
                 />
                 <button
                   type="button"
                   data-testid="button-toggle-password"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover-elevate active-elevate-2 p-1 rounded"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-md hover:bg-muted/50"
                 >
                   {showPassword ? (
                     <EyeOff className="w-5 h-5" />
@@ -108,10 +108,11 @@ export default function Login() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-center">
               <button
                 type="button"
                 data-testid="link-forgot-password"
+                onClick={() => setLocation("/forgot-password")}
                 className="text-sm text-primary hover:underline"
               >
                 Esqueci minha senha
@@ -128,11 +129,40 @@ export default function Login() {
             </Button>
           </form>
 
-          <div className="text-center text-sm text-muted-foreground">
-            Não tem uma conta?{" "}
-            <button className="text-primary hover:underline font-medium">
-              Solicite acesso
-            </button>
+          <div className="text-center text-sm text-muted-foreground space-y-2">
+            <div>
+              Não tem uma conta?{" "}
+              <button 
+                type="button"
+                data-testid="link-request-access"
+                onClick={() => setLocation("/request-access")}
+                className="text-primary hover:underline font-medium"
+              >
+                Solicite acesso
+              </button>
+            </div>
+            <div>
+              Conta inativa?{" "}
+              <button 
+                type="button"
+                onClick={() => {
+                  const email = prompt("Digite seu email para reenviar o link de ativação:");
+                  if (email) {
+                    fetch("/api/auth/resend-activation", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ email }),
+                    })
+                      .then(res => res.json())
+                      .then(data => alert(data.message || "Email enviado!"))
+                      .catch(err => alert("Erro ao enviar email"));
+                  }
+                }}
+                className="text-primary hover:underline font-medium"
+              >
+                Reenviar ativação
+              </button>
+            </div>
           </div>
         </div>
       </div>

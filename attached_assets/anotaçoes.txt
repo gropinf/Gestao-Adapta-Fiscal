@@ -1,0 +1,87 @@
+pkill -f "tsx server/index.ts" || true
+npm run db:push
+
+Login: admin@adaptafiscal.com.br / password123
+
+iniciei projeto em 01/11/2025  +-19:30
+
+doc criado no gdrive para acompanhar o projeto:
+https://docs.google.com/document/d/1vjMGghozG3heCatUJdE5YPk9Pr0k7vb-_-u-r5_xR1c/edit?tab=t.89tsb8nisbgv
+
+prompt criado pelo grok em 01/11/2025  17:50
+>>inicio prompt
+Crie um projeto completo no Replit para uma plataforma de Gestão de XML para NFe e NFCe, chamada 'Gestao Adapta Fiscal'. Use Node.js para o backend (com Express.js, Multer para uploads, Nodemailer para e-mails, xml2js para parsing de XML, e pg para PostgreSQL), React para o frontend (com Vite para build rápido, Tailwind CSS para estilização moderna e profissional, React Router para navegação, e Axios para API calls), e PostgreSQL como banco de dados (configure via Replit Database ou conexão externa simples). O visual geral deve ser moderno e profissional: paleta de cores azul escuro (#1E3A8A) como primária, cinza claro (#F3F4F6) para fundos, verde (#10B981) para ações positivas; fontes sans-serif (Inter ou similar); layout responsivo com grid/flexbox; animações sutis (via Framer Motion) em transições e botões.
+Estrutura Geral:
+
+Multi-tenant: Suporte a multi-empresa (um usuário acessa múltiplas empresas via dropdown no header; cada empresa tem múltiplos usuários com roles: admin, viewer, editor). Tabelas no DB: users (id, email, password_hash, role), companies (id, cnpj, razao_social, nome_fantasia, inscricao_estadual, endereco_completo), company_users (user_id, company_id), accountants (id, company_id, email_contador, host_email, password_email, ssl_email, porta_email).
+Armazenamento: Crie pastas no filesystem do Replit (/uploads/raw para XMLs crus, /storage/validated para processados). Use chave da NFe como filename (ex.: NFe35150412345678000190550010000000012000000010.xml); ignore duplicatas.
+Parsing XML: No backend, use xml2js para extrair dados chave (tipo_doc: NFe/NFCe, data_emissao, hora, cnpj_emitente, cnpj_destinatario, razao_social_destinatario, total_nota, total_impostos, itens). Atribua ao cliente (company) baseado no CNPJ do emitente/destinatario. Categorize como 'emitida' (se company é emitente) ou 'recebida' (se company é destinatário). Adicione validação básica contra schema SEFAZ (use lib como 'nfe-validator' se disponível, ou simule com regex para chave).
+Melhorias baseadas em pesquisa (Qive, NF-e Expert, Fiscal Monitor): Validação automática SEFAZ via API pública (integre com endpoint SEFAZ para status); relatórios exportáveis (Excel via xlsx, PDF via pdf-lib); trilha de auditoria (log tabela actions: user_id, action, timestamp); alertas de não-conformidade (ex.: XML inválido); integração IMAP (use imap-simple) para monitorar e-mail global e baixar XMLs automaticamente.
+
+Telas e Funcionalidades:
+
+Tela de Login (modelo Asaas - split-screen moderno):
+
+Lado esquerdo (50% tela): Formulário clean com campos email e senha (inputs com bordas arredondadas, ícone de olho para senha, botão 'Entrar' verde com hover). Suporte a 'Esqueci senha' (envie e-mail reset). Use gradiente azul/roxo no fundo do form.
+Lado direito (50% tela): Promo de 'Adapta Online' com ilustrações vetoriais (ex.: ícones de XML/notas fiscais fluindo para dashboard), texto: 'Automatize sua gestão fiscal com Adapta Online: Baixe, valide e organize NFe/NFCe em lote. Integre com Adapta Desktop para zero esforço!'. Adicione stats fictícios (ex.: '99% de conformidade SEFAZ') e CTA 'Saiba mais' linkando para /about. Responsivo: Em mobile, stack vertical.
+Autentique com JWT (bcrypt para hash). Após login, redirecione para dashboard da empresa default.
+
+
+Dashboard (bonito e profissional):
+
+Layout: Header com logo, nome empresa (dropdown para trocar), usuário logado, logout. Sidebar esquerda com menu: Dashboard, Clientes, Contabilidades, XMLs, Uploads, Relatórios.
+Conteúdo principal: Cards KPIs (use grid): Total XMLs processados (gráfico pie Chart.js: emitidas vs recebidas), Total notas no mês (bar chart), Alertas (ex.: 5 XMLs inválidos - lista clicável), Gráfico linha de volume por período. Abaixo, tabela resumida de XMLs recentes (5 últimos) com colunas: Tipo, Data, Total, Status (Válido/Inválido). Botão 'Upload Batch' e 'Enviar para Contador'.
+
+
+Cadastro de Cliente (Emitente):
+
+Formulário: CNPJ (valide via API ReceitaWS), IE, Razão Social, Nome Fantasia, Endereço (Campos: rua, número, bairro, cidade, UF, CEP - use mask para CEP). Seção E-mail Config: Host, Porta, SSL (checkbox), Usuário, Senha (para envio/monitoramento). Salve na tabela companies. Valide CNPJ uniqueness por empresa.
+
+
+Cadastro de Contabilidade:
+
+Formulário: Nome, E-mail Contador, Empresas associadas (multi-select de companies). Salve na tabela accountants. Uma contabilidade para múltiplos clientes.
+
+
+Página de Upload XML (Batch e API):
+
+Interface: Drag-and-drop zone (use react-dropzone) para múltiplos XMLs. Botão 'Processar'. No backend: API POST /upload (multer multi-file), para cada XML: Parse, valide, salve em /storage/validated se novo, delete de /uploads/raw após. Retorne progresso (WebSocket ou polling). Suporte API externa (POST /api/upload com auth token).
+
+
+Monitoramento de E-mail:
+
+Cron job no backend (node-cron, a cada 5min): Conecte via IMAP ao e-mail global do cliente, busque anexos .xml, baixe/process como upload batch. Log erros.
+
+
+Lista de XMLs:
+
+Tabela paginada (react-table): Filtros (dropdown Tipo: NFe/NFCe/Emitida/Recebida; DatePicker para período). Colunas: Tipo Doc, Data, Hora, Destinatário (razao_social), Total Nota (R$), Total Imposto (R$), Status Validação. Ações: Botão 'Detalhe' (modal ou nova página), 'Baixar XML' (link direto para arquivo).
+Adicione busca por chave/CNPJ.
+
+
+Página de Detalhes da Nota (baseado em detalhe_nfe.png - assuma layout padrão NFe):
+
+Layout em seções accordion: Cabeçalho (Chave, Tipo, Data/Hora, Status SEFAZ), Emitente/Destinatário (CNPJ, Razão, Endereço), Produtos (tabela: Descrição, Qtd, Valor Unit, Total), Totais (Subtotal, Impostos breakdown: ICMS, PIS, etc., Total Geral), XML Raw (pré-visualização colapsável). Botões: Baixar XML, Baixar DANFE (gere PDF simples via html2canvas), Enviar por E-mail (para contador, com anexo).
+
+
+Envio para Contabilidade:
+
+Página/função: Selecione período/filtros, gere ZIP de XMLs selecionados, envie via Nodemailer para e-mail_contador (use config do cliente).
+
+
+
+Banco de Dados (PostgreSQL):
+
+Tabelas principais: companies (acima), xmls (id, company_id, chave, tipo_doc, data_emissao, hora, cnpj_emitente, cnpj_destinatario, razao_social_destinatario, total_nota, total_impostos, categoria: emitida/recebida, status_validacao, filepath, created_at), actions (para audit).
+Migrações via Knex.js.
+
+Segurança e Deploy:
+
+Autenticação JWT em todas rotas (exceto login). Valide uploads (apenas .xml, limite 100MB total).
+No Replit: Configure secrets para DB_URL, JWT_SECRET. Rode backend em porta 3000, frontend em 5173 (proxy via package.json).
+
+Gere o código inicial completo: Estrutura de pastas, package.json com deps (express, pg, bcrypt, jsonwebtoken, xml2js, multer, nodemailer, imap-simple, node-cron, react, tailwindcss, etc.), rotas API, componentes React, queries SQL. Inclua seeds para teste (1 company, 2 XMLs sample). Foque em MVP funcional, com comentários em PT."
+>>fim prompt
+
+Esse prompt é denso o suficiente para o Replit gerar um boilerplate sólido, mas modular para você iterar. Se precisar de ajustes (ex.: mais detalhes na imagem detalhe_nfe.png, que assumi como layout padrão de NFe com seções de header/produtos/totais), me avise! Teste colando no Replit e refine com prompts follow-up como "Adicione validação SEFAZ na rota de upload"
+

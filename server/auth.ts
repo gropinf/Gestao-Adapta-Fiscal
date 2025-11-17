@@ -1,6 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { db } from "./db";
+import { users } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 
@@ -10,6 +13,9 @@ export interface AuthRequest extends Request {
     email: string;
     role: string;
   };
+  userId?: string;
+  userRole?: string;
+  userActive?: boolean;
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -23,8 +29,8 @@ export async function comparePassword(
   return bcrypt.compare(password, hash);
 }
 
-export function generateToken(userId: string, email: string, role: string): string {
-  return jwt.sign({ userId, email, role }, JWT_SECRET, { expiresIn: "7d" });
+export function generateToken(userId: string, email: string, role: string, active: boolean = true): string {
+  return jwt.sign({ userId, email, role, active }, JWT_SECRET, { expiresIn: "7d" });
 }
 
 export function verifyToken(token: string): any {
@@ -35,29 +41,58 @@ export function verifyToken(token: string): any {
   }
 }
 
-export function authMiddleware(
+export async function authMiddleware(
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) {
-  const authHeader = req.headers.authorization;
+  try {
+    const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "No token provided" });
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = verifyToken(token);
+
+    if (!decoded) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    // Busca usuário no banco para obter dados atualizados (role, active)
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, decoded.userId))
+      .limit(1);
+
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    // Atualizar last_login_at (sem await para não bloquear)
+    db.update(users)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(users.id, user.id))
+      .execute()
+      .catch(err => console.error("Erro ao atualizar lastLoginAt:", err));
+
+    // Adicionar informações do usuário no request (compatibilidade)
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    // Adicionar campos para novos middlewares de autorização
+    req.userId = user.id;
+    req.userRole = user.role;
+    req.userActive = user.active;
+
+    next();
+  } catch (error) {
+    console.error("Erro no authMiddleware:", error);
+    return res.status(500).json({ error: "Authentication error" });
   }
-
-  const token = authHeader.substring(7);
-  const decoded = verifyToken(token);
-
-  if (!decoded) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-
-  req.user = {
-    id: decoded.userId,
-    email: decoded.email,
-    role: decoded.role,
-  };
-
-  next();
 }

@@ -12,8 +12,10 @@ interface AuthState {
   user: User | null;
   token: string | null;
   currentCompanyId: string | null;
-  setAuth: (user: User, token: string) => void;
+  accessLogId: string | null;
+  setAuth: (user: User, token: string, accessLogId?: string) => void;
   setCurrentCompany: (companyId: string) => void;
+  setAccessLogId: (accessLogId: string | null) => void;
   logout: () => void;
 }
 
@@ -23,9 +25,11 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       token: null,
       currentCompanyId: null,
-      setAuth: (user, token) => set({ user, token }),
+      accessLogId: null,
+      setAuth: (user, token, accessLogId) => set({ user, token, accessLogId: accessLogId || null }),
       setCurrentCompany: (companyId) => set({ currentCompanyId: companyId }),
-      logout: () => set({ user: null, token: null, currentCompanyId: null }),
+      setAccessLogId: (accessLogId) => set({ accessLogId }),
+      logout: () => set({ user: null, token: null, currentCompanyId: null, accessLogId: null }),
     }),
     {
       name: 'auth-storage',

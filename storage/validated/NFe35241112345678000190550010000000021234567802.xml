@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
+  <NFe>
+    <infNFe Id="NFe35241112345678000190550010000000021234567802">
+      <ide>
+        <dhEmi>2024-11-01T14:15:00-03:00</dhEmi>
+        <mod>65</mod>
+      </ide>
+      <emit>
+        <CNPJ>12345678000190</CNPJ>
+      </emit>
+      
+      <total>
+        <ICMSTot>
+          <vNF>89.90</vNF>
+        </ICMSTot>
+      </total>
+    </infNFe>
+  </NFe>
+</nfeProc>

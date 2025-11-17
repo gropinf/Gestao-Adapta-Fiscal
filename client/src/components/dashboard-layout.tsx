@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import {
   SidebarProvider,
   Sidebar,
@@ -28,14 +28,18 @@ import {
   FileText,
   Upload,
   BarChart3,
+  Mail,
+  Send,
+  Shield,
   LogOut,
   ChevronDown,
   FileCheck,
 } from "lucide-react";
 import { useLocation } from "wouter";
-import { useAuthStore } from "@/lib/auth";
+import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@shared/schema";
+import { UserProfileMenu } from "./UserProfileMenu";
 
 const menuItems = [
   {
@@ -64,9 +68,40 @@ const menuItems = [
     icon: Upload,
   },
   {
+    title: "Upload Eventos",
+    url: "/upload-eventos",
+    icon: Upload,
+  },
+  {
+    title: "Análise de Sequência",
+    url: "/analise-sequencia",
+    icon: BarChart3,
+  },
+  {
     title: "Relatórios",
     url: "/relatorios",
     icon: BarChart3,
+  },
+  {
+    title: "Monitor de Email",
+    url: "/configuracoes/email-monitor",
+    icon: Mail,
+  },
+  {
+    title: "Logs de Verificação",
+    url: "/configuracoes/email-logs",
+    icon: Mail,
+  },
+  {
+    title: "Enviar XMLs por Email",
+    url: "/envio-xml-email",
+    icon: Send,
+  },
+  {
+    title: "Auditoria de Acessos",
+    url: "/auditoria/acessos",
+    icon: Shield,
+    adminOnly: true, // Apenas para admin
   },
 ];
 
@@ -117,7 +152,8 @@ interface DashboardLayoutProps {
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [, setLocation] = useLocation();
-  const { user, currentCompanyId, setCurrentCompany, logout } = useAuthStore();
+  const { user, currentCompanyId, setCurrentCompany, logout, accessLogId, setAccessLogId } = useAuthStore();
+  const hasCalledSelectCompany = useRef(false);
 
   // Fetch user's companies
   const { data: companies, isLoading } = useQuery<Company[]>({
@@ -126,9 +162,32 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   });
 
   // Set first company as current if none selected
-  if (companies && companies.length > 0 && !currentCompanyId) {
-    setCurrentCompany(companies[0].id);
-  }
+  useEffect(() => {
+    if (companies && companies.length > 0 && !currentCompanyId) {
+      const firstCompanyId = companies[0].id;
+      setCurrentCompany(firstCompanyId);
+      
+      // Chamar API para registrar seleção inicial da empresa (atualiza accessLog)
+      if (accessLogId && !hasCalledSelectCompany.current) {
+        hasCalledSelectCompany.current = true;
+        fetch("/api/auth/select-company", {
+          method: "POST",
+          headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ companyId: firstCompanyId, accessLogId }),
+        })
+          .then(() => {
+            console.log("Empresa inicial selecionada e registrada no log");
+            setAccessLogId(null); // Limpar accessLogId após uso
+          })
+          .catch((error) => {
+            console.error("Erro ao registrar seleção de empresa:", error);
+          });
+      }
+    }
+  }, [companies, currentCompanyId, setCurrentCompany, accessLogId, setAccessLogId]);
 
   const currentCompany = companies?.find((c) => c.id === currentCompanyId) || companies?.[0];
 
@@ -139,6 +198,27 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const formatCNPJ = (cnpj: string) => {
     return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+  };
+
+  const handleCompanyChange = async (newCompanyId: string) => {
+    // Se já tinha uma empresa selecionada, é uma troca (switch)
+    if (currentCompanyId && currentCompanyId !== newCompanyId) {
+      try {
+        await fetch("/api/auth/switch-company", {
+          method: "POST",
+          headers: {
+            ...getAuthHeader(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ companyId: newCompanyId }),
+        });
+        console.log("Troca de empresa registrada no log");
+      } catch (error) {
+        console.error("Erro ao registrar troca de empresa:", error);
+      }
+    }
+    
+    setCurrentCompany(newCompanyId);
   };
 
   const style = {
@@ -175,7 +255,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                     {companies.map((company) => (
                       <DropdownMenuItem
                         key={company.id}
-                        onClick={() => setCurrentCompany(company.id)}
+                        onClick={() => handleCompanyChange(company.id)}
                         data-testid={`option-company-${company.id}`}
                       >
                         <div className="flex flex-col">
@@ -191,40 +271,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               ) : null}
             </div>
 
-            <div className="flex items-center gap-4">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="gap-2"
-                    data-testid="button-user-menu"
-                  >
-                    <Avatar className="w-8 h-8">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-                        {user?.name.substring(0, 2).toUpperCase() || "AD"}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="font-medium">{user?.name || "Admin User"}</span>
-                    <ChevronDown className="w-4 h-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Minha Conta</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem>Perfil</DropdownMenuItem>
-                  <DropdownMenuItem>Configurações</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={handleLogout}
-                    data-testid="button-logout"
-                    className="text-destructive"
-                  >
-                    <LogOut className="w-4 h-4 mr-2" />
-                    Sair
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+            <UserProfileMenu />
           </header>
 
           {/* Main content */}

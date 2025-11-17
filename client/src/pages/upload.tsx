@@ -13,14 +13,20 @@ import {
   Loader2,
   File,
   X,
+  AlertCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthStore, getAuthHeader } from "@/lib/auth";
 
 interface UploadedFile {
   file: File;
   status: "pending" | "processing" | "success" | "error";
   progress: number;
   error?: string;
+  step?: string;
+  chave?: string;
+  categoria?: string;
+  totalNota?: string;
 }
 
 export default function Upload() {
@@ -47,48 +53,133 @@ export default function Upload() {
   });
 
   const processFiles = async () => {
-    setIsProcessing(true);
+    const currentCompanyId = useAuthStore.getState().currentCompanyId;
     
-    // Simulate file processing
-    for (let i = 0; i < uploadedFiles.length; i++) {
-      if (uploadedFiles[i].status === "pending") {
-        setUploadedFiles((prev) =>
-          prev.map((f, idx) =>
-            idx === i ? { ...f, status: "processing", progress: 0 } : f
-          )
-        );
-
-        // Simulate processing with progress
-        for (let progress = 0; progress <= 100; progress += 20) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          setUploadedFiles((prev) =>
-            prev.map((f, idx) =>
-              idx === i ? { ...f, progress } : f
-            )
-          );
-        }
-
-        // Randomly succeed or fail for demo
-        const success = Math.random() > 0.2;
-        setUploadedFiles((prev) =>
-          prev.map((f, idx) =>
-            idx === i
-              ? {
-                  ...f,
-                  status: success ? "success" : "error",
-                  error: success ? undefined : "Formato inválido ou XML corrompido",
-                }
-              : f
-          )
-        );
-      }
+    if (!currentCompanyId) {
+      toast({
+        title: "Empresa não selecionada",
+        description: "Por favor, selecione uma empresa no menu superior",
+        variant: "destructive",
+      });
+      return;
     }
 
-    setIsProcessing(false);
-    toast({
-      title: "Processamento concluído!",
-      description: "Os XMLs foram processados e validados",
-    });
+    // Pega os arquivos pendentes ANTES de atualizar o estado
+    const filesToProcess = uploadedFiles.filter((f) => f.status === "pending");
+    
+    if (filesToProcess.length === 0) {
+      toast({
+        title: "Nenhum arquivo para processar",
+        description: "Adicione arquivos XML para processar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+
+    try {
+      // Marca todos como processando
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.status === "pending"
+            ? { ...f, status: "processing", progress: 0 }
+            : f
+        )
+      );
+
+      // Prepara FormData
+      const formData = new FormData();
+      
+      // Usa os arquivos que pegamos ANTES da atualização do estado
+      filesToProcess.forEach((uploadedFile) => {
+        formData.append("files", uploadedFile.file);
+      });
+
+      // Envia para API
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: getAuthHeader(),
+        body: formData,
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(errorData.message || errorData.error || "Erro ao processar arquivos");
+      }
+
+      const result = await res.json();
+
+      // Atualiza status de cada arquivo baseado na resposta
+      const successMap = new Map(
+        result.success?.map((s: any) => [s.filename, s]) || []
+      );
+      const errorMap = new Map(
+        result.errors?.map((e: any) => [e.filename, e]) || []
+      );
+
+      setUploadedFiles((prev) =>
+        prev.map((uploadedFile) => {
+          const filename = uploadedFile.file.name;
+          
+          if (successMap.has(filename)) {
+            const successData = successMap.get(filename);
+            return {
+              ...uploadedFile,
+              status: "success" as const,
+              progress: 100,
+              chave: successData.chave,
+              categoria: successData.categoria,
+              totalNota: successData.totalNota,
+            };
+          }
+          
+          if (errorMap.has(filename)) {
+            const errorData = errorMap.get(filename);
+            return {
+              ...uploadedFile,
+              status: "error" as const,
+              progress: 0,
+              error: errorData.error,
+              step: errorData.step,
+            };
+          }
+          
+          return uploadedFile;
+        })
+      );
+
+      // Mostra resultado
+      toast({
+        title: "Processamento concluído!",
+        description: result.message || `${result.success?.length || 0} arquivo(s) processado(s) com sucesso`,
+      });
+
+    } catch (error) {
+      console.error("Erro no upload:", error);
+      
+      // Marca todos como erro
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.status === "processing"
+            ? {
+                ...f,
+                status: "error" as const,
+                error: error instanceof Error ? error.message : "Erro ao processar arquivo",
+              }
+            : f
+        )
+      );
+
+      toast({
+        title: "Erro no processamento",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const removeFile = (index: number) => {
@@ -228,14 +319,45 @@ export default function Upload() {
                         <Loader2 className="w-4 h-4 text-primary animate-spin flex-shrink-0" />
                       )}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <p className="text-sm text-muted-foreground">
                         {formatFileSize(uploadedFile.file.size)}
                       </p>
+                      {uploadedFile.status === "success" && uploadedFile.chave && (
+                        <>
+                          <span className="text-xs text-muted-foreground">•</span>
+                          <p className="text-xs font-mono text-primary">
+                            Chave: {uploadedFile.chave.substring(0, 8)}...
+                          </p>
+                          {uploadedFile.categoria && (
+                            <>
+                              <span className="text-xs text-muted-foreground">•</span>
+                              <Badge variant="outline" className="text-xs h-5">
+                                {uploadedFile.categoria}
+                              </Badge>
+                            </>
+                          )}
+                          {uploadedFile.totalNota && (
+                            <>
+                              <span className="text-xs text-muted-foreground">•</span>
+                              <p className="text-xs text-muted-foreground">
+                                R$ {parseFloat(uploadedFile.totalNota).toFixed(2)}
+                              </p>
+                            </>
+                          )}
+                        </>
+                      )}
                       {uploadedFile.status === "error" && uploadedFile.error && (
-                        <p className="text-sm text-destructive">
-                          {uploadedFile.error}
-                        </p>
+                        <>
+                          <span className="text-xs text-muted-foreground">•</span>
+                          <p className="text-sm text-destructive flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" />
+                            {uploadedFile.error}
+                            {uploadedFile.step && (
+                              <span className="text-xs">({uploadedFile.step})</span>
+                            )}
+                          </p>
+                        </>
                       )}
                     </div>
                     {uploadedFile.status === "processing" && (

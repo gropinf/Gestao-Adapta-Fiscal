@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
+  <NFe>
+    <infNFe Id="NFe35241112345678000190550010000000011234567801">
+      <ide>
+        <dhEmi>2024-11-01T10:30:00-03:00</dhEmi>
+        <mod>55</mod>
+      </ide>
+      <emit>
+        <CNPJ>12345678000190</CNPJ>
+      </emit>
+      
+      <dest>
+        <CNPJ>98765432000100</CNPJ>
+        <xNome>Cliente ABC LTDA</xNome>
+      </dest>
+      
+      <total>
+        <ICMSTot>
+          <vNF>1500.00</vNF>
+        </ICMSTot>
+      </total>
+    </infNFe>
+  </NFe>
+</nfeProc>

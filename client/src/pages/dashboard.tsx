@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import AlertsCard from "@/components/alerts-card";
 import {
   FileText,
   TrendingUp,
@@ -11,9 +12,11 @@ import {
   CheckCircle2,
   Upload,
   Send,
-  Calendar,
-  FileCheck,
-  FileX,
+  ArrowUpRight,
+  ArrowDownRight,
+  DollarSign,
+  Receipt,
+  Loader2,
 } from "lucide-react";
 import { Pie, Line } from "react-chartjs-2";
 import {
@@ -28,8 +31,7 @@ import {
   Legend,
 } from "chart.js";
 import { useQuery } from "@tanstack/react-query";
-import { useAuthStore } from "@/lib/auth";
-import type { Xml } from "@shared/schema";
+import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useLocation } from "wouter";
 
 // Register ChartJS components
@@ -44,125 +46,144 @@ ChartJS.register(
   Legend
 );
 
+interface DashboardStats {
+  totalXmls: number;
+  emitidas: number;
+  recebidas: number;
+  totalNotas: number;
+  totalImpostos: number;
+  nfeCount: number;
+  nfceCount: number;
+  recentXmls: any[];
+  volumeByDay: { date: string; count: number }[];
+}
+
 export default function Dashboard() {
   const [, setLocation] = useLocation();
-  const { currentCompanyId } = useAuthStore();
+  const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
 
-  // Fetch XMLs for current company
-  const { data: xmls, isLoading } = useQuery<Xml[]>({
-    queryKey: ["/api/xmls", { companyId: currentCompanyId }],
+  // Fetch dashboard stats
+  const { data: stats, isLoading, isError } = useQuery<DashboardStats>({
+    queryKey: ["/api/dashboard/stats", { companyId: currentCompanyId }],
     enabled: !!currentCompanyId,
+    queryFn: async () => {
+      if (!currentCompanyId) {
+        throw new Error("Company ID não definido");
+      }
+
+      const res = await fetch(`/api/dashboard/stats?companyId=${currentCompanyId}`, {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Erro ao carregar estatísticas");
+      }
+
+      return res.json();
+    },
   });
 
-  // Calculate KPIs from real data
-  const kpis = useMemo(() => {
-    if (!xmls || !currentCompanyId) return { total: 0, emitidas: 0, recebidas: 0, totalValue: 0, validCount: 0 };
-
-    const emitidas = xmls.filter((x) => x.categoria === "emitida").length;
-    const recebidas = xmls.filter((x) => x.categoria === "recebida").length;
-    const validCount = xmls.filter((x) => x.statusValidacao === "valido").length;
-    const totalValue = xmls.reduce((sum, x) => {
-      const value = parseFloat(x.totalNota || "0");
-      return sum + (isNaN(value) ? 0 : value);
-    }, 0);
-
-    return {
-      total: xmls.length,
-      emitidas,
-      recebidas,
-      totalValue,
-      validCount,
-    };
-  }, [xmls, currentCompanyId]);
-
-  // Prepare chart data from real XMLs
+  // Prepare pie chart data
   const pieData = useMemo(() => {
-    if (!xmls) return null;
-
-    const nfeEmitidas = xmls.filter((x) => x.tipoDoc === "NFe" && x.categoria === "emitida").length;
-    const nfeRecebidas = xmls.filter((x) => x.tipoDoc === "NFe" && x.categoria === "recebida").length;
-    const nfce = xmls.filter((x) => x.tipoDoc === "NFCe").length;
+    if (!stats) return null;
 
     return {
-      labels: ["NFe Emitidas", "NFe Recebidas", "NFCe"],
+      labels: ["Emitidas", "Recebidas"],
       datasets: [
         {
-          data: [nfeEmitidas, nfeRecebidas, nfce],
+          data: [stats.emitidas, stats.recebidas],
           backgroundColor: [
-            "hsl(142, 71%, 45%)",
-            "hsl(217, 91%, 48%)",
-            "hsl(195, 85%, 42%)",
+            "hsl(142, 71%, 45%)", // Verde
+            "hsl(217, 91%, 60%)", // Azul
           ],
           borderWidth: 0,
         },
       ],
     };
-  }, [xmls]);
+  }, [stats]);
 
-  // Prepare line chart data (last 6 months)
+  // Prepare line chart data
   const lineData = useMemo(() => {
-    if (!xmls) return null;
-
-    const now = new Date();
-    const monthsLabels = [];
-    const monthsData = [];
-
-    for (let i = 5; i >= 0; i--) {
-      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthName = date.toLocaleDateString("pt-BR", { month: "short" });
-      monthsLabels.push(monthName.charAt(0).toUpperCase() + monthName.slice(1));
-
-      const count = xmls.filter((x) => {
-        const xmlDate = new Date(x.dataEmissao);
-        return xmlDate.getMonth() === date.getMonth() && xmlDate.getFullYear() === date.getFullYear();
-      }).length;
-
-      monthsData.push(count);
-    }
+    if (!stats) return null;
 
     return {
-      labels: monthsLabels,
+      labels: stats.volumeByDay.map(d => {
+        const date = new Date(d.date);
+        return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      }),
       datasets: [
         {
-          label: "Volume de XMLs",
-          data: monthsData,
+          label: "XMLs Processados",
+          data: stats.volumeByDay.map(d => d.count),
           borderColor: "hsl(142, 71%, 45%)",
-          backgroundColor: "hsl(142, 71%, 45%, 0.1)",
+          backgroundColor: "hsla(142, 71%, 45%, 0.1)",
           tension: 0.4,
+          fill: true,
         },
       ],
     };
-  }, [xmls]);
+  }, [stats]);
 
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: false,
-      },
-    },
-  };
-
-  // Get recent 5 XMLs
-  const recentXmls = useMemo(() => {
-    if (!xmls) return [];
-    return [...xmls]
-      .sort((a, b) => new Date(b.dataEmissao).getTime() - new Date(a.dataEmissao).getTime())
-      .slice(0, 5);
-  }, [xmls]);
-
-  const formatCurrency = (value: number | string) => {
-    const num = typeof value === "string" ? parseFloat(value) : value;
+  const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
       currency: "BRL",
-    }).format(num);
+    }).format(value);
   };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString("pt-BR");
-  };
+  // Loading state
+  if (isLoading || !stats) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-8 space-y-8">
+          <div>
+            <h1 className="text-3xl font-bold">Dashboard</h1>
+            <p className="text-muted-foreground mt-1">Carregando estatísticas...</p>
+          </div>
+          
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+            {[1, 2, 3, 4].map(i => (
+              <Card key={i}>
+                <CardHeader className="pb-3">
+                  <Skeleton className="h-4 w-24" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-8 w-16 mb-2" />
+                  <Skeleton className="h-3 w-32" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Error state
+  if (isError || !currentCompanyId) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-7xl mx-auto p-8">
+          <Card className="p-8">
+            <div className="flex flex-col items-center justify-center gap-4 text-center">
+              <AlertCircle className="w-12 h-12 text-muted-foreground" />
+              <div>
+                <h3 className="text-lg font-semibold">
+                  {!currentCompanyId ? "Empresa não selecionada" : "Erro ao carregar estatísticas"}
+                </h3>
+                <p className="text-muted-foreground mt-1">
+                  {!currentCompanyId 
+                    ? "Por favor, selecione uma empresa no menu superior"
+                    : "Não foi possível carregar os dados do dashboard"}
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -172,258 +193,257 @@ export default function Dashboard() {
           <div>
             <h1 className="text-3xl font-bold">Dashboard</h1>
             <p className="text-muted-foreground mt-1">
-              Visão geral das suas notas fiscais
+              Visão geral dos seus documentos fiscais
             </p>
           </div>
-          <div className="flex gap-3">
-            <Button variant="outline" data-testid="button-send-accountant" disabled>
+          <div className="flex gap-2">
+            <Button onClick={() => setLocation("/upload")} data-testid="button-upload">
+              <Upload className="w-4 h-4 mr-2" />
+              Upload XMLs
+            </Button>
+            <Button variant="outline" data-testid="button-send">
               <Send className="w-4 h-4 mr-2" />
               Enviar para Contador
-            </Button>
-            <Button data-testid="button-upload-batch" onClick={() => setLocation("/upload")}>
-              <Upload className="w-4 h-4 mr-2" />
-              Upload em Lote
             </Button>
           </div>
         </div>
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Card className="hover-elevate">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total XMLs
-              </CardTitle>
-              <FileText className="w-4 h-4 text-muted-foreground" />
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+          {/* Total XMLs */}
+          <Card className="hover-elevate" data-testid="card-total-xmls">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Total de XMLs
+                </CardTitle>
+                <FileText className="w-5 h-5 text-primary" />
+              </div>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-24" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-total-xmls">{kpis.total}</div>
-                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                    <span>{kpis.emitidas} emitidas, {kpis.recebidas} recebidas</span>
-                  </p>
-                </>
-              )}
+              <div className="text-2xl font-bold">{stats.totalXmls}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {stats.nfeCount} NFe • {stats.nfceCount} NFCe
+              </p>
             </CardContent>
           </Card>
 
-          <Card className="hover-elevate">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Valor Total
-              </CardTitle>
-              <Calendar className="w-4 h-4 text-muted-foreground" />
+          {/* Emitidas */}
+          <Card className="hover-elevate" data-testid="card-emitidas">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Notas Emitidas
+                </CardTitle>
+                <ArrowUpRight className="w-5 h-5 text-blue-600" />
+              </div>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-32" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-total-value">{formatCurrency(kpis.totalValue)}</div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Soma de todas as notas
-                  </p>
-                </>
-              )}
+              <div className="text-2xl font-bold">{stats.emitidas}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {stats.totalXmls > 0 
+                  ? `${((stats.emitidas / stats.totalXmls) * 100).toFixed(0)}% do total`
+                  : "Nenhum XML processado"}
+              </p>
             </CardContent>
           </Card>
 
-          <Card className="hover-elevate">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Válidos
-              </CardTitle>
-              <FileCheck className="w-4 h-4 text-muted-foreground" />
+          {/* Recebidas */}
+          <Card className="hover-elevate" data-testid="card-recebidas">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Notas Recebidas
+                </CardTitle>
+                <ArrowDownRight className="w-5 h-5 text-purple-600" />
+              </div>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold text-primary" data-testid="text-valid-xmls">
-                    {kpis.validCount}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {kpis.total > 0 ? ((kpis.validCount / kpis.total) * 100).toFixed(1) : 0}% conformidade
-                  </p>
-                </>
-              )}
+              <div className="text-2xl font-bold">{stats.recebidas}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {stats.totalXmls > 0
+                  ? `${((stats.recebidas / stats.totalXmls) * 100).toFixed(0)}% do total`
+                  : "Nenhum XML processado"}
+              </p>
             </CardContent>
           </Card>
 
-          <Card className="hover-elevate border-destructive/50">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Alertas
-              </CardTitle>
-              <AlertCircle className="w-4 h-4 text-destructive" />
+          {/* Total Impostos */}
+          <Card className="hover-elevate" data-testid="card-impostos">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Total Impostos
+                </CardTitle>
+                <Receipt className="w-5 h-5 text-orange-600" />
+              </div>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-12" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold text-destructive" data-testid="text-alerts">
-                    {kpis.total - kpis.validCount}
-                  </div>
-                  <p className="text-xs text-destructive mt-1">
-                    XMLs com inconsistências
-                  </p>
-                </>
-              )}
+              <div className="text-2xl font-bold">
+                {formatCurrency(stats.totalImpostos)}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                De {formatCurrency(stats.totalNotas)} em notas
+              </p>
             </CardContent>
           </Card>
         </div>
 
-        {/* Charts section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold">
-                Distribuição de Documentos
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoading || !pieData ? (
-                <Skeleton className="h-64 w-full" />
-              ) : (
-                <>
-                  <div className="h-64">
-                    <Pie data={pieData} options={chartOptions} />
-                  </div>
-                  <div className="flex gap-4 justify-center mt-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-[hsl(142,71%,45%)]"></div>
-                      <span className="text-sm text-muted-foreground">NFe Emitidas</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-[hsl(217,91%,48%)]"></div>
-                      <span className="text-sm text-muted-foreground">NFe Recebidas</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-[hsl(195,85%,42%)]"></div>
-                      <span className="text-sm text-muted-foreground">NFCe</span>
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+        {/* Alertas e Charts */}
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Alertas */}
+          <AlertsCard />
 
-          <Card>
+          {/* Charts */}
+          <div className="lg:col-span-2 grid gap-6 lg:grid-cols-2">
+          {/* Pie Chart */}
+          <Card data-testid="chart-distribution">
             <CardHeader>
               <CardTitle className="text-lg font-semibold">
-                Volume por Período
+                Distribuição de Notas
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {isLoading || !lineData ? (
-                <Skeleton className="h-64 w-full" />
+              {stats.totalXmls > 0 && pieData ? (
+                <div className="flex items-center justify-center" style={{ height: "300px" }}>
+                  <Pie
+                    data={pieData}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          position: "bottom",
+                        },
+                      },
+                    }}
+                  />
+                </div>
               ) : (
-                <div className="h-64">
-                  <Line data={lineData} options={chartOptions} />
+                <div className="flex flex-col items-center justify-center h-[300px] text-center">
+                  <FileText className="w-12 h-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Nenhum dado para exibir</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Faça upload de XMLs para ver a distribuição
+                  </p>
                 </div>
               )}
             </CardContent>
           </Card>
+
+          {/* Line Chart */}
+          <Card data-testid="chart-volume">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold">
+                Volume dos Últimos 7 Dias
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {lineData ? (
+                <div style={{ height: "300px" }}>
+                  <Line
+                    data={lineData}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          display: false,
+                        },
+                      },
+                      scales: {
+                        y: {
+                          beginAtZero: true,
+                          ticks: {
+                            stepSize: 1,
+                          },
+                        },
+                      },
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-[300px]">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          </div>
         </div>
 
-        {/* Recent XMLs table */}
-        <Card>
+        {/* Recent XMLs */}
+        <Card data-testid="table-recent-xmls">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">
-              XMLs Recentes
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg font-semibold">XMLs Recentes</CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLocation("/xmls")}
+                data-testid="button-view-all"
+              >
+                Ver todos
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="px-6 py-4 text-left text-sm font-semibold">
-                      Tipo
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold">
-                      Data
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold">
-                      Destinatário
-                    </th>
-                    <th className="px-6 py-4 text-right text-sm font-semibold">
-                      Total
-                    </th>
-                    <th className="px-6 py-4 text-left text-sm font-semibold">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoading ? (
-                    Array.from({ length: 5 }).map((_, idx) => (
-                      <tr key={idx} className="border-b">
-                        <td className="px-6 py-4"><Skeleton className="h-6 w-16" /></td>
-                        <td className="px-6 py-4"><Skeleton className="h-4 w-24" /></td>
-                        <td className="px-6 py-4"><Skeleton className="h-4 w-32" /></td>
-                        <td className="px-6 py-4"><Skeleton className="h-4 w-24" /></td>
-                        <td className="px-6 py-4"><Skeleton className="h-6 w-20" /></td>
-                      </tr>
-                    ))
-                  ) : recentXmls.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
-                        Nenhum XML encontrado. Faça upload de XMLs para começar.
-                      </td>
-                    </tr>
-                  ) : (
-                    recentXmls.map((xml) => (
-                      <tr
-                        key={xml.id}
-                        className="border-b hover-elevate cursor-pointer"
-                        onClick={() => setLocation(`/xmls`)}
-                        data-testid={`row-xml-${xml.id}`}
-                      >
-                        <td className="px-6 py-4">
-                          <Badge variant="outline" className="font-mono">
+            {stats.recentXmls.length > 0 ? (
+              <div className="space-y-3">
+                {stats.recentXmls.map((xml: any) => (
+                  <div
+                    key={xml.id}
+                    className="flex items-center justify-between p-4 rounded-lg border hover-elevate cursor-pointer"
+                    onClick={() => setLocation(`/xmls`)}
+                    data-testid={`recent-xml-${xml.id}`}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                        <FileText className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="font-mono text-xs">
                             {xml.tipoDoc}
                           </Badge>
-                        </td>
-                        <td className="px-6 py-4 text-sm">{formatDate(xml.dataEmissao)}</td>
-                        <td className="px-6 py-4 text-sm">
-                          {xml.razaoSocialDestinatario || "N/A"}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-right font-medium tabular-nums">
-                          {formatCurrency(xml.totalNota)}
-                        </td>
-                        <td className="px-6 py-4">
-                          {xml.statusValidacao === "valido" ? (
-                            <Badge
-                              variant="outline"
-                              className="bg-primary/10 text-primary border-primary/20"
-                              data-testid={`status-valid-${xml.id}`}
-                            >
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              Válido
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant="outline"
-                              className="bg-destructive/10 text-destructive border-destructive/20"
-                              data-testid={`status-invalid-${xml.id}`}
-                            >
-                              <FileX className="w-3 h-3 mr-1" />
-                              Inválido
-                            </Badge>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                          <Badge
+                            variant="outline"
+                            className={
+                              xml.categoria === "emitida"
+                                ? "bg-blue-50 text-blue-700 border-blue-200 text-xs"
+                                : "bg-purple-50 text-purple-700 border-purple-200 text-xs"
+                            }
+                          >
+                            {xml.categoria}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {xml.razaoSocialDestinatario || "Destinatário não especificado"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-semibold">{formatCurrency(parseFloat(xml.totalNota || "0"))}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {xml.dataEmissao}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <FileText className="w-12 h-12 text-muted-foreground mb-4" />
+                <h3 className="text-lg font-semibold">Nenhum XML processado</h3>
+                <p className="text-muted-foreground mt-1 mb-4">
+                  Comece fazendo upload de arquivos XML
+                </p>
+                <Button onClick={() => setLocation("/upload")}>
+                  <Upload className="w-4 h-4 mr-2" />
+                  Fazer Upload
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
