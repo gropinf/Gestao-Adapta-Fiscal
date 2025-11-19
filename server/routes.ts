@@ -3193,3 +3193,20 @@ ${company.razaoSocial}
 
   return httpServer;
 }
+import type { Express } from "express";
+import { createServer, type Server } from "http";
+
+export function registerRoutes(app: Express): Server {
+  
+  // Health check
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Aqui você vai adicionar suas rotas conforme desenvolver
+  // Exemplo:
+  // app.post("/api/auth/login", loginHandler);
+  // app.get("/api/dados", authMiddleware, getDadosHandler);
+
+  return createServer(app);
+}

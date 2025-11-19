@@ -85,3 +85,36 @@ app.use((req, res, next) => {
     log(`serving on port ${port}`);
   });
 })();
+import express, { type Request, Response, NextFunction } from "express";
+import { registerRoutes } from "./routes";
+import { setupVite, serveStatic } from "./vite";
+import { db } from "./db";
+
+const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// CORS para desenvolvimento
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  next();
+});
+
+(async () => {
+  // Registrar rotas da API
+  const server = registerRoutes(app);
+
+  // Configurar Vite (dev) ou servir estáticos (prod)
+  if (process.env.NODE_ENV === "development") {
+    await setupVite(app, server);
+  } else {
+    serveStatic(app);
+  }
+
+  const PORT = 5000;
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Servidor rodando em http://0.0.0.0:${PORT}`);
+  });
+})();
