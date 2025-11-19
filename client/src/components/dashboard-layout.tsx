@@ -33,7 +33,6 @@ import {
   Shield,
   LogOut,
   ChevronDown,
-  FileCheck,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
@@ -113,8 +112,12 @@ function AppSidebar() {
       <SidebarContent className="p-4">
         <SidebarGroup>
           <div className="flex items-center gap-2 px-3 py-4 mb-2">
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <FileCheck className="w-6 h-6 text-primary-foreground" />
+            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center overflow-hidden">
+              <img 
+                src="/logo-adapta-A.ico" 
+                alt="Adapta Fiscal Logo" 
+                className="w-full h-full object-contain"
+              />
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg">Adapta Fiscal</span>
@@ -234,6 +237,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <header className="flex items-center justify-between h-16 px-6 border-b bg-background">
             <div className="flex items-center gap-4">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
+              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center overflow-hidden">
+                <img 
+                  src="/logo-adapta-A.ico" 
+                  alt="Adapta Fiscal Logo" 
+                  className="w-full h-full object-contain"
+                />
+              </div>
               {isLoading ? (
                 <div className="h-10 w-48 rounded bg-muted animate-pulse" />
               ) : companies && companies.length > 0 ? (

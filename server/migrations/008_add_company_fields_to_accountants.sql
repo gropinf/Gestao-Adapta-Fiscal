@@ -50,3 +50,4 @@ CREATE INDEX IF NOT EXISTS idx_accountants_nome ON accountants(nome);
 
 
 
+

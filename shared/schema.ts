@@ -468,19 +468,3 @@ export type InsertXmlEmailHistory = z.infer<typeof insertXmlEmailHistorySchema>;
 
 export type EmailCheckLog = typeof emailCheckLogs.$inferSelect;
 export type InsertEmailCheckLog = z.infer<typeof insertEmailCheckLogSchema>;
-import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
-import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-
-// Exemplo: Tabela de usuários
-export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  password: text("password").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-export const insertUserSchema = createInsertSchema(users);
-export const selectUserSchema = createSelectSchema(users);
-
-// Adicione mais tabelas conforme necessário para seu projeto CaixaFacil

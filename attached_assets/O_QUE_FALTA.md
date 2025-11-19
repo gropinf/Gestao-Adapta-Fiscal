@@ -568,3 +568,4 @@ const tipo = xml.cnpjEmitente === currentCompany.cnpj ? 'EMIT' : 'DEST';
 
 
 
+
