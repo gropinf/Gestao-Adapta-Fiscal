@@ -111,12 +111,12 @@ function AppSidebar() {
     <Sidebar>
       <SidebarContent className="p-4">
         <SidebarGroup>
-          <div className="flex items-center gap-2 px-3 py-4 mb-2">
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center overflow-hidden">
+          <div className="flex items-center gap-3 px-3 py-4 mb-2">
+            <div style={{ width: '48px', height: '48px', minWidth: '48px', minHeight: '48px' }} className="flex items-center justify-center">
               <img 
                 src="/logo-adapta-A.ico" 
                 alt="Adapta Fiscal Logo" 
-                className="w-full h-full object-contain"
+                style={{ width: '48px', height: '48px', objectFit: 'contain' }}
               />
             </div>
             <div className="flex flex-col">
