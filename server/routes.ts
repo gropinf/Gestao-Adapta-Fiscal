@@ -14,6 +14,7 @@ import { gerarDanfe, danfeExists, getDanfePath } from "./danfeService";
 import { testImapConnection } from "./emailTestService";
 import { checkEmailMonitor } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
+import * as contaboStorage from "./contaboStorage";
 import crypto from "crypto";
 import multer from "multer";
 import * as fs from "fs/promises";
@@ -3188,6 +3189,519 @@ ${company.razaoSocial}
       });
     }
   });
+
+  // ========================================
+  // CONTABO OBJECT STORAGE ROUTES
+  // ========================================
+
+  // Testar conexão com Contabo Storage
+  app.get("/api/storage/test", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const result = await contaboStorage.testStorageConnection();
+      
+      if (result.success) {
+        res.json({
+          status: "ok",
+          message: "Conexão com Contabo Storage funcionando!",
+          details: result.details,
+        });
+      } else {
+        res.status(500).json({
+          status: "error",
+          message: "Falha ao conectar com o storage",
+          error: result.error,
+        });
+      }
+    } catch (error: any) {
+      console.error("Erro ao testar storage:", error);
+      res.status(500).json({
+        status: "error",
+        message: "Erro ao testar conexão",
+        error: error.message || "Erro desconhecido",
+      });
+    }
+  });
+
+  // Upload de XML para Contabo Storage
+  app.post("/api/storage/upload-xml", authMiddleware, upload.single("file"), async (req: AuthRequest, res) => {
+    const tempFilePath = req.file?.path;
+    
+    const cleanupTempFile = async () => {
+      if (tempFilePath) {
+        await fs.unlink(tempFilePath).catch(() => {});
+      }
+    };
+
+    try {
+      const user = req.user;
+      if (!user) {
+        await cleanupTempFile();
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId } = req.body;
+      if (!companyId) {
+        await cleanupTempFile();
+        return res.status(400).json({ error: "companyId é obrigatório" });
+      }
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        await cleanupTempFile();
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        await cleanupTempFile();
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        await cleanupTempFile();
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ error: "Arquivo não enviado" });
+      }
+
+      // Ler conteúdo do arquivo
+      const fileContent = await fs.readFile(file.path);
+      
+      // Upload para Contabo Storage (extrai chaveAcesso do XML automaticamente)
+      const result = await contaboStorage.uploadXmlFromFile(
+        fileContent,
+        company.cnpj,
+        file.originalname
+      );
+
+      // Limpar arquivo temporário
+      await cleanupTempFile();
+
+      if (!result.success) {
+        return res.status(400).json({ 
+          error: result.error || "Erro ao fazer upload" 
+        });
+      }
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "storage_upload_xml",
+        details: JSON.stringify({
+          companyId,
+          cnpj: company.cnpj,
+          key: result.key,
+          url: result.url,
+        }),
+      });
+
+      res.json({
+        success: true,
+        message: "XML enviado para storage com sucesso",
+        data: {
+          key: result.key,
+          url: result.url,
+        },
+      });
+    } catch (error: any) {
+      await cleanupTempFile();
+      console.error("Erro ao fazer upload para storage:", error);
+      res.status(500).json({ 
+        error: "Erro ao fazer upload",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Listar XMLs de uma empresa no storage
+  app.get("/api/storage/xmls/:companyId", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId } = req.params;
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Listar XMLs no storage
+      const files = await contaboStorage.listXmlsByCompany(company.cnpj);
+
+      res.json({
+        success: true,
+        cnpj: contaboStorage.sanitizeCnpj(company.cnpj),
+        totalFiles: files.length,
+        files: files.map(f => ({
+          key: f.key,
+          size: f.size,
+          lastModified: f.lastModified,
+          url: f.url,
+          chaveAcesso: f.key.split('/').pop()?.replace('.xml', '') || '',
+        })),
+      });
+    } catch (error: any) {
+      console.error("Erro ao listar XMLs no storage:", error);
+      res.status(500).json({ 
+        error: "Erro ao listar XMLs",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Obter XML do storage
+  app.get("/api/storage/xml/:companyId/:chaveAcesso", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId, chaveAcesso } = req.params;
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Buscar XML no storage
+      const xmlContent = await contaboStorage.getXml(company.cnpj, chaveAcesso);
+      
+      if (!xmlContent) {
+        return res.status(404).json({ error: "XML não encontrado no storage" });
+      }
+
+      res.set("Content-Type", "application/xml");
+      res.set("Content-Disposition", `attachment; filename="${chaveAcesso}.xml"`);
+      res.send(xmlContent);
+    } catch (error: any) {
+      console.error("Erro ao buscar XML do storage:", error);
+      res.status(500).json({ 
+        error: "Erro ao buscar XML",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Verificar se XML existe no storage
+  app.get("/api/storage/xml-exists/:companyId/:chaveAcesso", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId, chaveAcesso } = req.params;
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Verificar se XML existe
+      const exists = await contaboStorage.xmlExists(company.cnpj, chaveAcesso);
+
+      res.json({
+        exists,
+        key: contaboStorage.getXmlKey(company.cnpj, chaveAcesso),
+      });
+    } catch (error: any) {
+      console.error("Erro ao verificar XML:", error);
+      res.status(500).json({ 
+        error: "Erro ao verificar XML",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Deletar XML do storage
+  app.delete("/api/storage/xml/:companyId/:chaveAcesso", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId, chaveAcesso } = req.params;
+
+      // Verificar se é admin
+      if (user.role !== "admin") {
+        return res.status(403).json({ error: "Apenas administradores podem excluir XMLs" });
+      }
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Deletar XML do storage
+      const deleted = await contaboStorage.deleteXml(company.cnpj, chaveAcesso);
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "storage_delete_xml",
+        details: JSON.stringify({
+          companyId,
+          cnpj: company.cnpj,
+          chaveAcesso,
+          deleted,
+        }),
+      });
+
+      res.json({
+        success: deleted,
+        message: deleted ? "XML excluído com sucesso" : "Falha ao excluir XML",
+      });
+    } catch (error: any) {
+      console.error("Erro ao excluir XML do storage:", error);
+      res.status(500).json({ 
+        error: "Erro ao excluir XML",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Deletar todos os arquivos de uma empresa
+  app.delete("/api/storage/company/:companyId", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId } = req.params;
+
+      // Verificar se é admin
+      if (user.role !== "admin") {
+        return res.status(403).json({ error: "Apenas administradores podem excluir arquivos" });
+      }
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Deletar todos os arquivos da empresa
+      const result = await contaboStorage.deleteAllByCompany(company.cnpj);
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "storage_delete_company_files",
+        details: JSON.stringify({
+          companyId,
+          cnpj: company.cnpj,
+          deleted: result.deleted,
+          success: result.success,
+        }),
+      });
+
+      if (result.success) {
+        res.json({
+          success: true,
+          message: `${result.deleted} arquivo(s) excluído(s) com sucesso`,
+          deleted: result.deleted,
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: result.error || "Erro ao excluir arquivos",
+        });
+      }
+    } catch (error: any) {
+      console.error("Erro ao excluir arquivos da empresa:", error);
+      res.status(500).json({ 
+        error: "Erro ao excluir arquivos",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Obter URL de download assinada
+  app.get("/api/storage/signed-url/:companyId/:chaveAcesso", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId, chaveAcesso } = req.params;
+      const expiresIn = parseInt(req.query.expiresIn as string) || 3600;
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Gerar URL assinada
+      const key = contaboStorage.getXmlKey(company.cnpj, chaveAcesso);
+      const signedUrl = await contaboStorage.getSignedDownloadUrl(key, expiresIn);
+
+      if (!signedUrl) {
+        return res.status(404).json({ error: "Não foi possível gerar URL assinada" });
+      }
+
+      res.json({
+        success: true,
+        url: signedUrl,
+        expiresIn,
+      });
+    } catch (error: any) {
+      console.error("Erro ao gerar URL assinada:", error);
+      res.status(500).json({ 
+        error: "Erro ao gerar URL",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Estatísticas do storage por empresa
+  app.get("/api/storage/stats/:companyId", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { companyId } = req.params;
+
+      // Verificar acesso à empresa
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      // Buscar empresa para obter CNPJ
+      const company = await storage.getCompanyById(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
+
+      // Listar todos os arquivos da empresa
+      const files = await contaboStorage.listAllByCompany(company.cnpj);
+      
+      const xmlFiles = files.filter(f => f.key.includes('/xmls/'));
+      const imageFiles = files.filter(f => !f.key.includes('/xmls/'));
+
+      const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+      const xmlSize = xmlFiles.reduce((acc, f) => acc + f.size, 0);
+      const imageSize = imageFiles.reduce((acc, f) => acc + f.size, 0);
+
+      res.json({
+        success: true,
+        stats: {
+          cnpj: contaboStorage.sanitizeCnpj(company.cnpj),
+          totalFiles: files.length,
+          totalSize,
+          totalSizeFormatted: formatBytes(totalSize),
+          xmls: {
+            count: xmlFiles.length,
+            size: xmlSize,
+            sizeFormatted: formatBytes(xmlSize),
+          },
+          images: {
+            count: imageFiles.length,
+            size: imageSize,
+            sizeFormatted: formatBytes(imageSize),
+          },
+        },
+      });
+    } catch (error: any) {
+      console.error("Erro ao buscar estatísticas:", error);
+      res.status(500).json({ 
+        error: "Erro ao buscar estatísticas",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Função auxiliar para formatar bytes
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
 
   const httpServer = createServer(app);
 

@@ -28,7 +28,48 @@ This application provides:
 - JWT authentication with bcrypt
 - XML parsing with xml2js
 - Email sending with Nodemailer
-- File storage with Replit Object Storage
+- File storage with Replit Object Storage (local)
+- **Contabo Object Storage** - S3-compatible cloud storage for XMLs
+
+## Contabo Object Storage Integration
+### Configuration
+The system uses Contabo Object Storage (S3-compatible) for storing XML files organized by company CNPJ.
+
+**Environment Variables:**
+- `CONTABO_STORAGE_ENDPOINT` - Storage endpoint (https://usc1.contabostorage.com)
+- `CONTABO_STORAGE_REGION` - Region (us-east-1)
+- `CONTABO_STORAGE_BUCKET` - Bucket name (caixafacil)
+- `CONTABO_STORAGE_ACCESS_KEY` - S3 access key
+- `CONTABO_STORAGE_SECRET_KEY` - S3 secret key
+
+### Storage Structure
+```
+{cnpj}/
+  └── xmls/
+      └── {chaveAcesso}.xml
+```
+
+Example: `12345678000190/xmls/35241112345678000190550010000001231234567890.xml`
+
+### API Endpoints
+- `GET /api/storage/test` - Test storage connection
+- `POST /api/storage/upload-xml` - Upload XML file
+- `GET /api/storage/xmls/:companyId` - List XMLs for a company
+- `GET /api/storage/xml/:companyId/:chaveAcesso` - Download XML
+- `GET /api/storage/xml-exists/:companyId/:chaveAcesso` - Check if XML exists
+- `DELETE /api/storage/xml/:companyId/:chaveAcesso` - Delete XML (admin only)
+- `DELETE /api/storage/company/:companyId` - Delete all files for company (admin only)
+- `GET /api/storage/signed-url/:companyId/:chaveAcesso` - Get signed download URL
+- `GET /api/storage/stats/:companyId` - Get storage statistics
+
+### Storage Module
+File: `server/contaboStorage.ts`
+- `uploadXml(xmlContent, cnpj, chaveAcesso)` - Upload XML
+- `getXml(cnpj, chaveAcesso)` - Download XML content
+- `listXmlsByCompany(cnpj)` - List all XMLs
+- `deleteXml(cnpj, chaveAcesso)` - Delete XML
+- `xmlExists(cnpj, chaveAcesso)` - Check existence
+- `testStorageConnection()` - Test connection
 
 ## Database Schema
 ### Core Tables
