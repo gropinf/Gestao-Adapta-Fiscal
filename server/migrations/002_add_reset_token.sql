@@ -17,3 +17,4 @@ COMMENT ON COLUMN users.reset_expires_at IS 'Data de expiração do token de res
 
 
 
+

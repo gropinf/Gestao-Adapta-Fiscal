@@ -16,3 +16,4 @@ COMMENT ON COLUMN xmls.danfe_path IS 'Caminho relativo do arquivo PDF DANFE gera
 
 
 
+

@@ -46,3 +46,4 @@ COMMENT ON COLUMN email_check_logs.triggered_by IS 'Quem/o quê iniciou a verifi
 
 
 
+

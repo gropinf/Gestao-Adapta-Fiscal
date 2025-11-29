@@ -24,3 +24,4 @@ CREATE INDEX IF NOT EXISTS idx_xmls_numero_nota ON xmls(numero_nota);
 
 
 
+

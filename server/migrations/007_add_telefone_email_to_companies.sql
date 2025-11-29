@@ -28,3 +28,4 @@ COMMENT ON COLUMN companies.crt IS 'Código de Regime Tributário (1=Simples Nac
 
 
 
+
