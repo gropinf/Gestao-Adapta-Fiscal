@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { getAuthHeader } from "@/lib/auth";
 
 export default function UploadEventosPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -63,6 +64,7 @@ export default function UploadEventosPage() {
 
       const response = await fetch("/api/xml-events/upload", {
         method: "POST",
+        headers: getAuthHeader(),
         body: formData,
         credentials: "include",
       });

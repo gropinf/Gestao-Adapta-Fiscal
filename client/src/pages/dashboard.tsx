@@ -66,6 +66,9 @@ export default function Dashboard() {
   const { data: stats, isLoading, isError } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats", { companyId: currentCompanyId }],
     enabled: !!currentCompanyId,
+    staleTime: 1000 * 30, // 30 segundos - dados considerados frescos
+    refetchInterval: 30000, // Atualiza a cada 30 segundos
+    refetchOnWindowFocus: true, // Atualiza quando a janela recebe foco
     queryFn: async () => {
       if (!currentCompanyId) {
         throw new Error("Company ID não definido");

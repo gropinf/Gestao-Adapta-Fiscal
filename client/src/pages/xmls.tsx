@@ -74,6 +74,9 @@ export default function Xmls() {
       },
     ],
     enabled: !!currentCompanyId,
+    staleTime: 1000 * 30, // 30 segundos - dados considerados frescos
+    refetchInterval: 30000, // Atualiza a cada 30 segundos
+    refetchOnWindowFocus: true, // Atualiza quando a janela recebe foco
     queryFn: async () => {
       if (!currentCompanyId) {
         throw new Error("Company ID não definido");
@@ -235,7 +238,17 @@ export default function Xmls() {
               Visualize e gerencie todos os XMLs processados
             </p>
           </div>
-          <Button data-testid="button-send-selected">
+          <Button 
+            data-testid="button-send-selected"
+            variant="outline"
+            onClick={() => {
+              toast({
+                title: "Funcionalidade em desenvolvimento",
+                description: "A seleção múltipla de XMLs para envio em lote estará disponível em breve.",
+                variant: "default",
+              });
+            }}
+          >
             <Send className="w-4 h-4 mr-2" />
             Enviar Selecionados
           </Button>

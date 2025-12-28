@@ -29,6 +29,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, useLocation } from "wouter";
+import { ErrorBoundaryPage } from "@/components/ErrorBoundaryPage";
 
 export default function XmlDetail() {
   const { toast } = useToast();
@@ -169,20 +170,23 @@ export default function XmlDetail() {
 
   if (isLoading) {
     return (
-      <DashboardLayout>
+      <ErrorBoundaryPage>
+        <DashboardLayout>
         <div className="max-w-7xl mx-auto p-8">
           <div className="flex items-center justify-center p-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
             <p className="ml-3 text-muted-foreground">Carregando detalhes do XML...</p>
           </div>
         </div>
-      </DashboardLayout>
+        </DashboardLayout>
+      </ErrorBoundaryPage>
     );
   }
 
   if (!xml || !parsedXml) {
     return (
-      <DashboardLayout>
+      <ErrorBoundaryPage>
+        <DashboardLayout>
         <div className="max-w-7xl mx-auto p-8">
           <Card className="p-8">
             <div className="text-center">
@@ -196,11 +200,13 @@ export default function XmlDetail() {
           </Card>
         </div>
       </DashboardLayout>
+      </ErrorBoundaryPage>
     );
   }
 
   return (
-    <DashboardLayout>
+    <ErrorBoundaryPage>
+      <DashboardLayout>
       <div className="max-w-7xl mx-auto p-8 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -554,7 +560,8 @@ export default function XmlDetail() {
         {/* Eventos relacionados à NFe */}
         <XmlEventsList chave={xml.chave} xmlId={xml.id} />
       </div>
-    </DashboardLayout>
+      </DashboardLayout>
+    </ErrorBoundaryPage>
   );
 }
 

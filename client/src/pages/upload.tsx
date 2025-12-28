@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import DashboardLayout from "@/components/dashboard-layout";
+import { ErrorBoundaryPage } from "@/components/ErrorBoundaryPage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -202,7 +203,8 @@ export default function Upload() {
   const errorCount = uploadedFiles.filter((f) => f.status === "error").length;
 
   return (
-    <DashboardLayout>
+    <ErrorBoundaryPage>
+      <DashboardLayout>
       <div className="max-w-7xl mx-auto p-8 space-y-8">
         {/* Page header */}
         <div>
@@ -435,6 +437,7 @@ export default function Upload() {
           </CardContent>
         </Card>
       </div>
-    </DashboardLayout>
+      </DashboardLayout>
+    </ErrorBoundaryPage>
   );
 }

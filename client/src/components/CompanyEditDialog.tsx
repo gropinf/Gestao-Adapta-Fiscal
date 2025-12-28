@@ -8,7 +8,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CompanyUsersTab } from "./CompanyUsersTab";
 import { CompanyAccountantsTab } from "./CompanyAccountantsTab";
-import { Building2, Users, Calculator } from "lucide-react";
+import { CompanyEmailConfigTab } from "./CompanyEmailConfigTab";
+import { Building2, Users, Calculator, Mail } from "lucide-react";
 import type { Company } from "@shared/schema";
 
 interface CompanyEditDialogProps {
@@ -31,7 +32,7 @@ export function CompanyEditDialog({ company, isOpen, onClose, editForm }: Compan
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="dados">
               <Building2 className="h-4 w-4 mr-2" />
               Dados da Empresa
@@ -43,6 +44,10 @@ export function CompanyEditDialog({ company, isOpen, onClose, editForm }: Compan
             <TabsTrigger value="contabilidades">
               <Calculator className="h-4 w-4 mr-2" />
               Contabilidades
+            </TabsTrigger>
+            <TabsTrigger value="email">
+              <Mail className="h-4 w-4 mr-2" />
+              Email SMTP
             </TabsTrigger>
           </TabsList>
 
@@ -56,6 +61,10 @@ export function CompanyEditDialog({ company, isOpen, onClose, editForm }: Compan
 
           <TabsContent value="contabilidades" className="space-y-4">
             {company && <CompanyAccountantsTab companyId={company.id} />}
+          </TabsContent>
+
+          <TabsContent value="email" className="space-y-4">
+            {company && <CompanyEmailConfigTab company={company} />}
           </TabsContent>
         </Tabs>
       </DialogContent>

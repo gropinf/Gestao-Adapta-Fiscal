@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { logger } from "./logger";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 
@@ -76,7 +77,7 @@ export async function authMiddleware(
       .set({ lastLoginAt: new Date() })
       .where(eq(users.id, user.id))
       .execute()
-      .catch(err => console.error("Erro ao atualizar lastLoginAt:", err));
+      .catch(err => logger.error("Erro ao atualizar lastLoginAt", err as Error, { userId: user.id }));
 
     // Adicionar informações do usuário no request (compatibilidade)
     req.user = {
@@ -92,7 +93,7 @@ export async function authMiddleware(
 
     next();
   } catch (error) {
-    console.error("Erro no authMiddleware:", error);
+    logger.error("Erro no authMiddleware", error instanceof Error ? error : new Error(String(error)));
     return res.status(500).json({ error: "Authentication error" });
   }
 }

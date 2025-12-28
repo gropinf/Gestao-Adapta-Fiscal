@@ -429,28 +429,47 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getXmlsByCompany(companyId: string, filters?: XmlFilters): Promise<Xml[]> {
-    let query = db.select().from(xmls).where(eq(xmls.companyId, companyId));
+    // Busca a empresa para obter o CNPJ
+    const company = await this.getCompany(companyId);
+    if (!company) {
+      return [];
+    }
+
+    // Monta condições de filtro
+    const conditions: any[] = [
+      or(
+        eq(xmls.cnpjEmitente, company.cnpj),
+        eq(xmls.cnpjDestinatario, company.cnpj)
+      )
+    ];
 
     if (filters?.tipoDoc) {
-      query = query.where(eq(xmls.tipoDoc, filters.tipoDoc)) as any;
+      conditions.push(eq(xmls.tipoDoc, filters.tipoDoc));
     }
     if (filters?.categoria) {
-      query = query.where(eq(xmls.categoria, filters.categoria)) as any;
+      conditions.push(eq(xmls.categoria, filters.categoria));
     }
     if (filters?.statusValidacao) {
-      query = query.where(eq(xmls.statusValidacao, filters.statusValidacao)) as any;
+      conditions.push(eq(xmls.statusValidacao, filters.statusValidacao));
+    }
+    if (filters?.dataInicio) {
+      conditions.push(gte(xmls.dataEmissao, filters.dataInicio));
+    }
+    if (filters?.dataFim) {
+      conditions.push(lte(xmls.dataEmissao, filters.dataFim));
     }
     if (filters?.search) {
-      query = query.where(
+      conditions.push(
         or(
           like(xmls.chave, `%${filters.search}%`),
           like(xmls.cnpjEmitente, `%${filters.search}%`),
           like(xmls.cnpjDestinatario, `%${filters.search}%`)
         )
-      ) as any;
+      );
     }
 
-    return (query as any).orderBy(desc(xmls.dataEmissao));
+    const query = db.select().from(xmls).where(and(...conditions));
+    return query.orderBy(desc(xmls.dataEmissao));
   }
 
   async getXmlsByCnpj(cnpj: string, filters?: XmlFilters): Promise<Xml[]> {

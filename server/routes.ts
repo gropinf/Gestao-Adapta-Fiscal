@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { authMiddleware, hashPassword, comparePassword, generateToken, type AuthRequest } from "./auth";
+import { logger } from "./logger";
 import { isAdmin, canAccessCompany, getUserCompanies, isActiveUser } from "./middleware/authorization";
 import { parseXmlContent, validateChave, isValidNFeXml } from "./xmlParser";
 import { parseEventOrInutilizacao, isValidEventXml, detectEventType, type ParsedEventoData, type ParsedInutilizacaoData } from "./xmlEventParser";
@@ -127,7 +128,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         token,
       });
     } catch (error) {
-      console.error("Registration error:", error);
+      logger.error("Erro ao registrar usuário", error instanceof Error ? error : new Error(String(error)), {
+        email: req.body.email,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -194,7 +197,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         accessLogId: accessLog.id, // Para uso no logout
       });
     } catch (error) {
-      console.error("Login error:", error);
+      logger.error("Erro no login", error instanceof Error ? error : new Error(String(error)), {
+        email: req.body.email,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -216,7 +221,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true, message: "Logout realizado com sucesso" });
     } catch (error) {
-      console.error("Logout error:", error);
+      logger.error("Erro no logout", error instanceof Error ? error : new Error(String(error)), {
+        userId: req.user?.id,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -243,7 +250,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true, message: "Empresa selecionada com sucesso" });
     } catch (error) {
-      console.error("Select company error:", error);
+      logger.error("Erro ao selecionar empresa", error instanceof Error ? error : new Error(String(error)), {
+        userId: req.user?.id,
+        companyId: req.body.companyId,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -795,15 +805,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(company);
     } catch (error) {
-      console.error("Create company error:", error);
+      logger.error("Erro ao criar empresa", error instanceof Error ? error : new Error(String(error)), {
+        userId: req.user?.id,
+        cnpj: req.body.cnpj,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
 
-  app.put("/api/companies/:id", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+  app.put("/api/companies/:id", authMiddleware, async (req: AuthRequest, res) => {
     try {
+      const user = req.user!;
       const { id } = req.params;
       const updateData = req.body;
+
+      // Admin pode atualizar qualquer empresa, outros usuários só suas próprias
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === id);
+        
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
 
       const company = await storage.updateCompany(id, updateData);
 
@@ -1548,7 +1572,11 @@ ${company.razaoSocial}
       );
       res.json(events);
     } catch (error) {
-      console.error("Get events by period error:", error);
+      logger.error("Erro ao buscar eventos por período", error instanceof Error ? error : new Error(String(error)), {
+        companyId: req.query.companyId,
+        periodStart: req.query.periodStart,
+        periodEnd: req.query.periodEnd,
+      });
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Internal server error" 
       });
@@ -1746,7 +1774,10 @@ ${company.razaoSocial}
 
       res.json(results);
     } catch (error) {
-      console.error("Upload events error:", error);
+      logger.error("Erro no upload de eventos", error instanceof Error ? error : new Error(String(error)), {
+        userId: req.user?.id,
+        fileCount: (req.files as Express.Multer.File[])?.length || 0,
+      });
       
       // Clean up all files on error
       const files = req.files as Express.Multer.File[];
@@ -2358,7 +2389,11 @@ ${company.razaoSocial}
       res.send(excelBuffer);
 
     } catch (error) {
-      console.error("Excel export error:", error);
+      logger.error("Erro ao exportar relatório Excel", error instanceof Error ? error : new Error(String(error)), {
+        userId: req.user?.id,
+        companyId: req.body.companyId,
+        filters: { tipoDoc: req.body.tipoDoc, categoria: req.body.categoria, statusValidacao: req.body.statusValidacao },
+      });
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Internal server error" 
       });
@@ -2605,7 +2640,9 @@ ${company.razaoSocial}
       });
 
     } catch (error) {
-      console.error("Dashboard stats error:", error);
+      logger.error("Erro ao buscar estatísticas do dashboard", error instanceof Error ? error : new Error(String(error)), {
+        companyId: req.query.companyId,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -3702,6 +3739,57 @@ ${company.razaoSocial}
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+
+  // Endpoint de teste do Sentry (público - sem autenticação)
+  app.get("/api/test-sentry", async (req, res) => {
+    try {
+      // Força um erro de teste com mensagem única e fácil de encontrar
+      const testId = `TEST-${Date.now()}`;
+      throw new Error(`[SENTRY-TEST-${testId}] Erro de teste do Sentry - NFe Manager - Verifique se este erro aparece no dashboard`);
+    } catch (error) {
+      logger.error(`[SENTRY-TEST] Erro de teste do Sentry - NFe Manager`, error as Error, {
+        test: true,
+        testId: `TEST-${Date.now()}`,
+        endpoint: "/api/test-sentry",
+        timestamp: new Date().toISOString(),
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+        sentryConfigured: !!process.env.SENTRY_DSN,
+      });
+      
+      res.json({ 
+        success: true,
+        message: "Erro enviado para Sentry - verifique o dashboard",
+        sentryConfigured: !!process.env.SENTRY_DSN,
+        testId: `TEST-${Date.now()}`,
+        note: "Este erro foi capturado e enviado para o Sentry. Procure por 'SENTRY-TEST' ou 'NFe Manager' no dashboard."
+      });
+    }
+  });
+
+  // Endpoint de teste do Sentry com autenticação (versão alternativa)
+  app.get("/api/test-sentry-auth", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      // Força um erro de teste para verificar se o Sentry está funcionando
+      throw new Error("Teste de erro para Sentry (autenticado) - Este é um erro intencional para verificar a integração");
+    } catch (error) {
+      logger.error("Erro de teste do Sentry (autenticado)", error as Error, {
+        test: true,
+        endpoint: "/api/test-sentry-auth",
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        timestamp: new Date().toISOString(),
+      });
+      
+      res.json({ 
+        success: true,
+        message: "Erro enviado para Sentry - verifique o dashboard",
+        sentryConfigured: !!process.env.SENTRY_DSN,
+        userId: req.user?.id,
+        note: "Este erro foi capturado e enviado para o Sentry com informações do usuário. Verifique o dashboard do Sentry para ver os detalhes."
+      });
+    }
+  });
 
   const httpServer = createServer(app);
 

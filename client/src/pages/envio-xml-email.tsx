@@ -129,6 +129,7 @@ export default function EnvioXmlEmail() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...getAuthHeader(),
         },
         credentials: "include",
         body: JSON.stringify({

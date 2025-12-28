@@ -14,10 +14,6 @@ run = ["npm", "run", "start"]
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 43445
-externalPort = 3001
-
 [env]
 PORT = "5000"
 
@@ -53,3 +49,5 @@ CONTABO_STORAGE_REGION = "us-east-1"
 CONTABO_STORAGE_BUCKET = "caixafacil"
 CONTABO_STORAGE_ACCESS_KEY = "a6d3e0e6fe835b9859825f356d2e8148"
 CONTABO_STORAGE_SECRET_KEY = "1db0a5e9ff58616b546e86b2b2f7f0d7"
+SENTRY_ENABLE_DEV = "true"
+SENTRY_DSN = "https://3cee72fb8d69b8ccc4a9677ab30d8ba0@o4510602129440768.ingest.us.sentry.io/4510602143596544"

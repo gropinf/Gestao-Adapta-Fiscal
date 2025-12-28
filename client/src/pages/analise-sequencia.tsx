@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { useAuthStore } from "@/lib/auth";
 
 interface SequenceItem {
   tipo: "emitida" | "inutilizada" | "faltante";
@@ -52,9 +53,7 @@ interface SequenceSummary {
 export default function AnaliseSequenciaPage() {
   const { toast } = useToast();
   const [location, navigate] = useLocation();
-  
-  // Get selected company from URL or localStorage
-  const selectedCompanyId = localStorage.getItem("selectedCompanyId") || "";
+  const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
   
   // Set default dates (first day of current month to today)
   const hoje = new Date();
@@ -68,11 +67,18 @@ export default function AnaliseSequenciaPage() {
   };
   
   const [filters, setFilters] = useState({
-    companyId: selectedCompanyId,
+    companyId: currentCompanyId || "",
     modelo: "55",
     periodStart: formatDate(primeiroDiaMes),
     periodEnd: formatDate(hoje),
   });
+
+  // Atualiza companyId quando a empresa selecionada mudar
+  useEffect(() => {
+    if (currentCompanyId) {
+      setFilters(prev => ({ ...prev, companyId: currentCompanyId }));
+    }
+  }, [currentCompanyId]);
   
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [summary, setSummary] = useState<SequenceSummary | null>(null);
@@ -82,7 +88,7 @@ export default function AnaliseSequenciaPage() {
     if (filters.companyId) {
       loadSequence();
     }
-  }, []);
+  }, [filters.companyId]);
 
   const loadSequence = async () => {
     if (!filters.companyId) {

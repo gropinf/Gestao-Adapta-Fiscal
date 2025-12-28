@@ -45,6 +45,7 @@ export default function AlertsCard() {
 
       return res.json();
     },
+    staleTime: 1000 * 30, // 30 segundos - dados considerados frescos
     refetchInterval: 30000, // Atualiza a cada 30s
   });
 
