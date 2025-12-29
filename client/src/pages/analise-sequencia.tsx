@@ -84,11 +84,8 @@ export default function AnaliseSequenciaPage() {
   const [summary, setSummary] = useState<SequenceSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (filters.companyId) {
-      loadSequence();
-    }
-  }, [filters.companyId]);
+  // Removido carregamento automático - usuário deve clicar no botão "Analisar"
+  // Isso evita erros ao acessar a página antes da empresa estar carregada
 
   const loadSequence = async () => {
     if (!filters.companyId) {

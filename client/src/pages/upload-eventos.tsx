@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { getAuthHeader } from "@/lib/auth";
+import DashboardLayout from "@/components/dashboard-layout";
 
 export default function UploadEventosPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -146,14 +147,15 @@ export default function UploadEventosPage() {
   };
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold">Upload de Eventos NFe</h1>
-        <p className="text-muted-foreground">
-          Envie XMLs de eventos (cancelamento, carta de correção) e inutilizações
-        </p>
-      </div>
+    <DashboardLayout>
+      <div className="container mx-auto py-6 space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-3xl font-bold">Upload de Eventos NFe</h1>
+          <p className="text-muted-foreground">
+            Envie XMLs de eventos (cancelamento, carta de correção) e inutilizações
+          </p>
+        </div>
 
       {/* Upload Card */}
       <Card>
@@ -421,7 +423,8 @@ export default function UploadEventosPage() {
           </ul>
         </CardContent>
       </Card>
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
 

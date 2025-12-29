@@ -145,10 +145,11 @@ export function CompanyEmailConfigTab({ company }: CompanyEmailConfigTabProps) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="w-5 h-5" />
-            Configuração de Email SMTP
+            Configuração de Email SMTP para Envio de XML
           </CardTitle>
           <CardDescription>
-            Configure as credenciais SMTP para envio de XMLs por email. Esta configuração será usada ao enviar XMLs para contabilidade.
+            Configure as credenciais SMTP (servidor, porta, usuário e senha) para envio de XMLs por email. 
+            Esta configuração é necessária para enviar XMLs para contabilidade e outros destinatários.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
