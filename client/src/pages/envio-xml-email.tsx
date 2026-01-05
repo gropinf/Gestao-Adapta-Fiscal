@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@shared/schema";
 import { Calendar, Mail, Package, Send, CheckCircle2, XCircle, Loader2, AlertCircle, Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import DashboardLayout from "@/components/dashboard-layout";
 
 interface EmailHistoryItem {
   id: string;
@@ -91,6 +92,7 @@ export default function EnvioXmlEmail() {
       const response = await fetch(
         `/api/xml-email/history?companyId=${currentCompanyId}`,
         {
+          headers: getAuthHeader(),
           credentials: "include",
         }
       );
@@ -219,22 +221,25 @@ export default function EnvioXmlEmail() {
 
   if (!selectedCompany) {
     return (
-      <div className="container mx-auto p-6">
-        <Card>
-          <CardContent className="p-12 text-center">
-            <AlertCircle className="w-16 h-16 mx-auto mb-4 text-yellow-500" />
-            <h2 className="text-2xl font-bold mb-2">Empresa não selecionada</h2>
-            <p className="text-muted-foreground">
-              Selecione uma empresa no menu superior para enviar XMLs por email.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      <DashboardLayout>
+        <div className="container mx-auto p-6">
+          <Card>
+            <CardContent className="p-12 text-center">
+              <AlertCircle className="w-16 h-16 mx-auto mb-4 text-yellow-500" />
+              <h2 className="text-2xl font-bold mb-2">Empresa não selecionada</h2>
+              <p className="text-muted-foreground">
+                Selecione uma empresa no menu superior para enviar XMLs por email.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <DashboardLayout>
+      <div className="container mx-auto p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold mb-2">📧 Envio de XMLs por Email</h1>
         <p className="text-muted-foreground">
@@ -462,7 +467,8 @@ export default function EnvioXmlEmail() {
           )}
         </CardContent>
       </Card>
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
 

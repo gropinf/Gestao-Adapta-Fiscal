@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Loader2, AlertCircle, Calendar, FileText, X, Edit, Ban, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getAuthHeader } from "@/lib/auth";
 
 interface XmlEvent {
   id: string;
@@ -52,6 +53,7 @@ export function XmlEventsList({ chave, xmlId }: XmlEventsListProps) {
         : `/api/xml-events/xml/${xmlId}`;
 
       const response = await fetch(endpoint, {
+        headers: getAuthHeader(),
         credentials: "include",
       });
 

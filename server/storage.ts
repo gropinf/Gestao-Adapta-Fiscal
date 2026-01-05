@@ -40,7 +40,7 @@ import {
   type InsertEmailCheckLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, like, or, gte, lte } from "drizzle-orm";
+import { eq, and, desc, like, or, gte, lte, sql } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -453,10 +453,18 @@ export class DatabaseStorage implements IStorage {
       conditions.push(eq(xmls.statusValidacao, filters.statusValidacao));
     }
     if (filters?.dataInicio) {
-      conditions.push(gte(xmls.dataEmissao, filters.dataInicio));
+      // Garantir que dataInicio está no formato YYYY-MM-DD e validar
+      const dataInicio = filters.dataInicio.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dataInicio)) {
+        conditions.push(gte(xmls.dataEmissao, dataInicio));
+      }
     }
     if (filters?.dataFim) {
-      conditions.push(lte(xmls.dataEmissao, filters.dataFim));
+      // Garantir que dataFim está no formato YYYY-MM-DD e validar
+      const dataFim = filters.dataFim.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dataFim)) {
+        conditions.push(lte(xmls.dataEmissao, dataFim));
+      }
     }
     if (filters?.search) {
       conditions.push(
@@ -474,12 +482,10 @@ export class DatabaseStorage implements IStorage {
 
   async getXmlsByCnpj(cnpj: string, filters?: XmlFilters): Promise<Xml[]> {
     // Busca XMLs onde o CNPJ é emitente OU destinatário
-    let whereCondition = or(
+    const whereCondition = or(
       eq(xmls.cnpjEmitente, cnpj),
       eq(xmls.cnpjDestinatario, cnpj)
     );
-
-    let query = db.select().from(xmls).where(whereCondition);
 
     // Aplicar filtros adicionais
     const conditions = [whereCondition];
@@ -493,22 +499,32 @@ export class DatabaseStorage implements IStorage {
     if (filters?.statusValidacao) {
       conditions.push(eq(xmls.statusValidacao, filters.statusValidacao));
     }
-
-    if (conditions.length > 1) {
-      query = db.select().from(xmls).where(and(...conditions));
+    if (filters?.dataInicio) {
+      // Garantir que dataInicio está no formato YYYY-MM-DD e validar
+      const dataInicio = filters.dataInicio.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dataInicio)) {
+        conditions.push(gte(xmls.dataEmissao, dataInicio));
+      }
     }
-
+    if (filters?.dataFim) {
+      // Garantir que dataFim está no formato YYYY-MM-DD e validar
+      const dataFim = filters.dataFim.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dataFim)) {
+        conditions.push(lte(xmls.dataEmissao, dataFim));
+      }
+    }
     if (filters?.search) {
-      query = query.where(
+      conditions.push(
         or(
           like(xmls.chave, `%${filters.search}%`),
           like(xmls.cnpjEmitente, `%${filters.search}%`),
           like(xmls.cnpjDestinatario, `%${filters.search}%`)
         )
-      ) as any;
+      );
     }
 
-    return (query as any).orderBy(desc(xmls.dataEmissao));
+    const query = db.select().from(xmls).where(and(...conditions));
+    return query.orderBy(desc(xmls.dataEmissao));
   }
 
   async createXml(insertXml: InsertXml): Promise<Xml> {

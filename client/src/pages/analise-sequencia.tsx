@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { useAuthStore } from "@/lib/auth";
+import { useAuthStore, getAuthHeader } from "@/lib/auth";
 
 interface SequenceItem {
   tipo: "emitida" | "inutilizada" | "faltante";
@@ -107,6 +107,7 @@ export default function AnaliseSequenciaPage() {
       });
 
       const response = await fetch(`/api/xmls/sequence-analysis?${params}`, {
+        headers: getAuthHeader(),
         credentials: "include",
       });
 

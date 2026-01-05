@@ -5,6 +5,17 @@ import { XmlEventsList } from "@/components/XmlEventsList";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -37,6 +48,14 @@ export default function XmlDetail() {
   const [, params] = useRoute("/xmls/:id");
   const xmlId = params?.id;
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
+  
+  // Estados do formulário de email
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailText, setEmailText] = useState("Anexo Nota Fiscal");
 
   // Fetch XML details with parsed data
   const { data: xmlData, isLoading } = useQuery({
@@ -58,6 +77,23 @@ export default function XmlDetail() {
 
   const xml = xmlData;
   const parsedXml = xmlData?.parsedData;
+
+  // Buscar empresa para obter email do emitente
+  const { data: companies } = useQuery({
+    queryKey: ["/api/companies"],
+    enabled: !!currentCompanyId,
+    queryFn: async () => {
+      const res = await fetch("/api/companies", {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Erro ao buscar empresas");
+      return res.json();
+    },
+  });
+
+  const currentCompany = companies?.find((c: any) => c.id === currentCompanyId);
+  const emailEmitente = currentCompany?.emailUser || "";
 
   const formatCurrency = (value: string | number) => {
     const numValue = typeof value === "string" ? parseFloat(value) : value;
@@ -168,6 +204,89 @@ export default function XmlDetail() {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
+  // Abrir diálogo de email
+  const handleOpenEmailDialog = () => {
+    if (!currentCompany?.emailUser) {
+      toast({
+        title: "Email não configurado",
+        description: "A empresa não possui configuração de email SMTP. Configure o email SMTP nas configurações da empresa.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Preencher email destinatário do XML se existir
+    const destinatarioEmail = parsedXml?.emailEmitente || "";
+    setEmailTo(destinatarioEmail);
+    
+    // Preencher assunto padrão
+    const numeroNota = parsedXml?.numeroNota || xml?.numeroNota || "";
+    const cnpj = parsedXml?.cnpjEmitente || "";
+    const razaoSocial = currentCompany?.razaoSocial || "";
+    setEmailSubject(`NFe: ${numeroNota}, Emitente: ${cnpj}-${razaoSocial}`);
+    
+    setEmailText("Anexo Nota Fiscal");
+    setEmailDialogOpen(true);
+  };
+
+  // Enviar email
+  const handleSendEmail = async () => {
+    if (!emailTo || !emailSubject) {
+      toast({
+        title: "Campos obrigatórios",
+        description: "Preencha o destinatário e o assunto",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!xmlId) {
+      toast({
+        title: "Erro",
+        description: "ID do XML não encontrado",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSendingEmail(true);
+    try {
+      const res = await fetch(`/api/xmls/${xmlId}/send-email`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeader(),
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          to: emailTo,
+          subject: emailSubject,
+          text: emailText,
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Erro ao enviar email");
+      }
+
+      toast({
+        title: "Email enviado!",
+        description: "O XML foi enviado por email com sucesso",
+      });
+
+      setEmailDialogOpen(false);
+    } catch (error) {
+      toast({
+        title: "Erro ao enviar email",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <ErrorBoundaryPage>
@@ -230,7 +349,7 @@ export default function XmlDetail() {
               <FileText className="w-4 h-4 mr-2" />
               Baixar DANFE
             </Button>
-            <Button>
+            <Button onClick={handleOpenEmailDialog}>
               <Mail className="w-4 h-4 mr-2" />
               Enviar por Email
             </Button>
@@ -560,6 +679,83 @@ export default function XmlDetail() {
         {/* Eventos relacionados à NFe */}
         <XmlEventsList chave={xml.chave} xmlId={xml.id} />
       </div>
+
+      {/* Dialog de Envio de Email */}
+      <Dialog open={emailDialogOpen} onOpenChange={setEmailDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Enviar XML por Email</DialogTitle>
+            <DialogDescription>
+              Preencha os dados para enviar o XML por email
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="email-from">Emitente</Label>
+              <Input
+                id="email-from"
+                value={emailEmitente}
+                disabled
+                className="bg-muted"
+              />
+              <p className="text-xs text-muted-foreground">
+                Email da empresa (não editável)
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-to">Destinatário</Label>
+              <Input
+                id="email-to"
+                type="email"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                placeholder="email@exemplo.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-subject">Título (Assunto)</Label>
+              <Input
+                id="email-subject"
+                value={emailSubject}
+                onChange={(e) => setEmailSubject(e.target.value)}
+                placeholder="Assunto do email"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-text">Texto</Label>
+              <Textarea
+                id="email-text"
+                value={emailText}
+                onChange={(e) => setEmailText(e.target.value)}
+                placeholder="Texto do email"
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEmailDialogOpen(false)}
+              disabled={sendingEmail}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleSendEmail} disabled={sendingEmail}>
+              {sendingEmail ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Enviando...
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4 mr-2" />
+                  Enviar
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </DashboardLayout>
     </ErrorBoundaryPage>
   );

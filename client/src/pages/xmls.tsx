@@ -3,6 +3,7 @@ import DashboardLayout from "@/components/dashboard-layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -25,11 +26,22 @@ import {
   Loader2,
   AlertCircle,
   File,
+  Calendar,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface Xml {
   id: string;
@@ -60,35 +72,64 @@ export default function Xmls() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  // Set default dates (first day of current month to last day of current month)
+  const hoje = new Date();
+  const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+  
+  const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+  
+  const [dataInicial, setDataInicial] = useState(formatDate(primeiroDiaMes));
+  const [dataFinal, setDataFinal] = useState(formatDate(ultimoDiaMes));
+  // Estados para seleção múltipla
+  const [selectedXmlIds, setSelectedXmlIds] = useState<Set<string>>(new Set());
+  const [sendSelectedDialogOpen, setSendSelectedDialogOpen] = useState(false);
+  const [sendingSelected, setSendingSelected] = useState(false);
+  // Estados do formulário de email para envio em lote
+  const [emailToSelected, setEmailToSelected] = useState("");
+  const [emailSubjectSelected, setEmailSubjectSelected] = useState("");
+  const [emailTextSelected, setEmailTextSelected] = useState("");
+  // Estados para os filtros que serão aplicados na busca
+  const [appliedFilters, setAppliedFilters] = useState<{
+    tipoDoc: string;
+    categoria: string;
+    statusValidacao: string;
+    tipoEmitDest: string;
+    search: string;
+    dataInicio: string;
+    dataFim: string;
+  } | null>(null);
+
   // Busca XMLs da API
   const { data: xmls = [], isLoading, isError, refetch } = useQuery<Xml[]>({
     queryKey: [
       "/api/xmls",
       { 
         companyId: currentCompanyId,
-        tipoDoc: tipoDoc !== "all" ? tipoDoc : undefined,
-        categoria: categoria !== "all" ? categoria : undefined,
-        statusValidacao: statusValidacao !== "all" ? statusValidacao : undefined,
-        tipo: tipoEmitDest !== "all" ? tipoEmitDest : undefined,
-        search: searchTerm || undefined,
+        ...(appliedFilters || {}),
       },
     ],
-    enabled: !!currentCompanyId,
+    enabled: !!currentCompanyId && !!appliedFilters, // Só busca quando appliedFilters está definido
     staleTime: 1000 * 30, // 30 segundos - dados considerados frescos
-    refetchInterval: 30000, // Atualiza a cada 30 segundos
-    refetchOnWindowFocus: true, // Atualiza quando a janela recebe foco
     queryFn: async () => {
-      if (!currentCompanyId) {
-        throw new Error("Company ID não definido");
+      if (!currentCompanyId || !appliedFilters) {
+        throw new Error("Company ID ou filtros não definidos");
       }
 
       const params = new URLSearchParams();
       params.append("companyId", currentCompanyId);
-      if (tipoDoc !== "all") params.append("tipoDoc", tipoDoc);
-      if (categoria !== "all") params.append("categoria", categoria);
-      if (statusValidacao !== "all") params.append("statusValidacao", statusValidacao);
-      if (tipoEmitDest !== "all") params.append("tipo", tipoEmitDest);
-      if (searchTerm) params.append("search", searchTerm);
+      if (appliedFilters.tipoDoc !== "all") params.append("tipoDoc", appliedFilters.tipoDoc);
+      if (appliedFilters.categoria !== "all") params.append("categoria", appliedFilters.categoria);
+      if (appliedFilters.statusValidacao !== "all") params.append("statusValidacao", appliedFilters.statusValidacao);
+      if (appliedFilters.tipoEmitDest !== "all") params.append("tipo", appliedFilters.tipoEmitDest);
+      if (appliedFilters.search) params.append("search", appliedFilters.search);
+      if (appliedFilters.dataInicio) params.append("dataInicio", appliedFilters.dataInicio);
+      if (appliedFilters.dataFim) params.append("dataFim", appliedFilters.dataFim);
 
       const res = await fetch(`/api/xmls?${params.toString()}`, {
         headers: getAuthHeader(),
@@ -103,16 +144,8 @@ export default function Xmls() {
     },
   });
 
-  // Filtra localmente por busca (caso a API não faça)
-  const filteredXmls = xmls.filter((xml) => {
-    if (!searchTerm) return true;
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      xml.chave.toLowerCase().includes(searchLower) ||
-      xml.razaoSocialDestinatario?.toLowerCase().includes(searchLower) ||
-      ""
-    );
-  });
+  // A API já faz todos os filtros, não precisa filtrar localmente
+  const filteredXmls = xmls;
 
   // Paginação local
   const totalPages = Math.ceil(filteredXmls.length / itemsPerPage);
@@ -131,6 +164,175 @@ export default function Xmls() {
 
   const formatChave = (chave: string) => {
     return chave.substring(0, 4) + "..." + chave.substring(chave.length - 4);
+  };
+
+  const formatDateBR = (dateStr: string): string => {
+    if (!dateStr) return "";
+    const [year, month, day] = dateStr.split("-");
+    return `${day}/${month}/${year}`;
+  };
+
+  const handleFilter = () => {
+    setAppliedFilters({
+      tipoDoc,
+      categoria,
+      statusValidacao,
+      tipoEmitDest,
+      search: searchTerm,
+      dataInicio: dataInicial,
+      dataFim: dataFinal,
+    });
+    setCurrentPage(1); // Reset para primeira página ao filtrar
+  };
+
+  // Buscar empresa para obter dados
+  const { data: companies } = useQuery({
+    queryKey: ["/api/companies"],
+    enabled: !!currentCompanyId,
+    queryFn: async () => {
+      const res = await fetch("/api/companies", {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Erro ao buscar empresas");
+      return res.json();
+    },
+  });
+
+  const currentCompany = companies?.find((c: any) => c.id === currentCompanyId);
+
+  // Toggle seleção de XML
+  const toggleXmlSelection = (xmlId: string) => {
+    const newSelection = new Set(selectedXmlIds);
+    if (newSelection.has(xmlId)) {
+      newSelection.delete(xmlId);
+    } else {
+      newSelection.add(xmlId);
+    }
+    setSelectedXmlIds(newSelection);
+  };
+
+  // Selecionar/desselecionar todos (todos os registros do filtro, não apenas da página)
+  const toggleSelectAll = () => {
+    // Verificar se todos os XMLs do filtro estão selecionados
+    const allSelected = xmls.length > 0 && xmls.every((xml) => selectedXmlIds.has(xml.id));
+    
+    if (allSelected) {
+      // Desselecionar todos
+      setSelectedXmlIds(new Set());
+    } else {
+      // Selecionar todos os XMLs do filtro
+      setSelectedXmlIds(new Set(xmls.map((xml) => xml.id)));
+    }
+  };
+
+  // Abrir diálogo de envio selecionados
+  const handleOpenSendSelectedDialog = () => {
+    if (selectedXmlIds.size === 0) {
+      toast({
+        title: "Nenhum XML selecionado",
+        description: "Selecione pelo menos um XML para enviar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!currentCompany?.emailUser) {
+      toast({
+        title: "Email não configurado",
+        description: "A empresa não possui configuração de email SMTP. Configure o email SMTP nas configurações da empresa.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Calcular data inicial e final dos XMLs selecionados
+    const selectedXmls = xmls.filter((xml) => selectedXmlIds.has(xml.id));
+    if (selectedXmls.length === 0) {
+      return;
+    }
+
+    const dates = selectedXmls.map((xml) => xml.dataEmissao).sort();
+    const dataInicio = dates[0];
+    const dataFim = dates[dates.length - 1];
+
+    // Formatar datas para exibição
+    const formatDateForText = (dateStr: string) => {
+      const [year, month, day] = dateStr.split("-");
+      return `${day}/${month}/${year}`;
+    };
+
+    const cnpj = currentCompany.cnpj || "";
+    const razaoSocial = currentCompany.razaoSocial || "";
+
+    // Preencher assunto e texto
+    setEmailSubjectSelected(`Arquivos NFe ${cnpj}->${razaoSocial}`);
+    setEmailTextSelected(`XML emitidos pela ${cnpj}->${razaoSocial}(${formatDateForText(dataInicio)} ate ${formatDateForText(dataFim)})`);
+    setEmailToSelected("");
+
+    setSendSelectedDialogOpen(true);
+  };
+
+  // Enviar XMLs selecionados
+  const handleSendSelected = async () => {
+    if (!emailToSelected || !emailSubjectSelected) {
+      toast({
+        title: "Campos obrigatórios",
+        description: "Preencha o destinatário e o assunto",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedXmlIds.size === 0) {
+      toast({
+        title: "Nenhum XML selecionado",
+        description: "Selecione pelo menos um XML para enviar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSendingSelected(true);
+    try {
+      const res = await fetch(`/api/xmls/send-selected`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeader(),
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          xmlIds: Array.from(selectedXmlIds),
+          to: emailToSelected,
+          subject: emailSubjectSelected,
+          text: emailTextSelected,
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Erro ao enviar email");
+      }
+
+      const result = await res.json();
+
+      toast({
+        title: "Email enviado!",
+        description: `${result.xmlCount} XML(s) foram enviados por email com sucesso`,
+      });
+
+      setSendSelectedDialogOpen(false);
+      setSelectedXmlIds(new Set()); // Limpar seleção
+    } catch (error) {
+      toast({
+        title: "Erro ao enviar email",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingSelected(false);
+    }
   };
 
   const handleDownloadXml = async (chave: string) => {
@@ -241,16 +443,11 @@ export default function Xmls() {
           <Button 
             data-testid="button-send-selected"
             variant="outline"
-            onClick={() => {
-              toast({
-                title: "Funcionalidade em desenvolvimento",
-                description: "A seleção múltipla de XMLs para envio em lote estará disponível em breve.",
-                variant: "default",
-              });
-            }}
+            onClick={handleOpenSendSelectedDialog}
+            disabled={selectedXmlIds.size === 0}
           >
             <Send className="w-4 h-4 mr-2" />
-            Enviar Selecionados
+            Enviar Selecionados {selectedXmlIds.size > 0 && `(${selectedXmlIds.size})`}
           </Button>
         </div>
 
@@ -270,46 +467,102 @@ export default function Xmls() {
                   />
                 </div>
               </div>
-              <Select value={tipoDoc} onValueChange={setTipoDoc}>
-                <SelectTrigger className="w-[180px] h-11" data-testid="select-tipo-doc">
-                  <SelectValue placeholder="Tipo de Documento" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="NFe">NFe</SelectItem>
-                  <SelectItem value="NFCe">NFCe</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={categoria} onValueChange={setCategoria}>
-                <SelectTrigger className="w-[180px] h-11" data-testid="select-categoria">
-                  <SelectValue placeholder="Categoria" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas</SelectItem>
-                  <SelectItem value="emitida">Emitidas</SelectItem>
-                  <SelectItem value="recebida">Recebidas</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={statusValidacao} onValueChange={setStatusValidacao}>
-                <SelectTrigger className="w-[180px] h-11">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="valido">Válidos</SelectItem>
-                  <SelectItem value="invalido">Inválidos</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={tipoEmitDest} onValueChange={setTipoEmitDest}>
-                <SelectTrigger className="w-[180px] h-11">
-                  <SelectValue placeholder="Tipo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="emit">Emitidas</SelectItem>
-                  <SelectItem value="dest">Recebidas</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-2">
+                <Label className="text-sm">Tipo Doc</Label>
+                <Select value={tipoDoc} onValueChange={setTipoDoc}>
+                  <SelectTrigger className="w-[180px] h-11" data-testid="select-tipo-doc">
+                    <SelectValue placeholder="Tipo de Documento" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    <SelectItem value="NFe">NFe</SelectItem>
+                    <SelectItem value="NFCe">NFCe</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm">Categoria</Label>
+                <Select value={categoria} onValueChange={setCategoria}>
+                  <SelectTrigger className="w-[180px] h-11" data-testid="select-categoria">
+                    <SelectValue placeholder="Categoria" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    <SelectItem value="emitida">Emitidas</SelectItem>
+                    <SelectItem value="recebida">Recebidas</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm">Status</Label>
+                <Select value={statusValidacao} onValueChange={setStatusValidacao}>
+                  <SelectTrigger className="w-[180px] h-11">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    <SelectItem value="valido">Válidos</SelectItem>
+                    <SelectItem value="invalido">Inválidos</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm">Tipo Emit/Dest</Label>
+                <Select value={tipoEmitDest} onValueChange={setTipoEmitDest}>
+                  <SelectTrigger className="w-[180px] h-11">
+                    <SelectValue placeholder="Tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    <SelectItem value="emit">Emitidas</SelectItem>
+                    <SelectItem value="dest">Recebidas</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {/* Período */}
+            <div className="flex flex-wrap items-end gap-4 mt-4 pt-4 border-t">
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <Calendar className="w-4 h-4" />
+                  Data Inicial
+                </Label>
+                <Input
+                  type="date"
+                  value={dataInicial}
+                  onChange={(e) => setDataInicial(e.target.value)}
+                  className="w-[180px] h-11"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm">
+                  <Calendar className="w-4 h-4" />
+                  Data Final
+                </Label>
+                <Input
+                  type="date"
+                  value={dataFinal}
+                  onChange={(e) => setDataFinal(e.target.value)}
+                  className="w-[180px] h-11"
+                />
+              </div>
+              <Button
+                onClick={handleFilter}
+                className="h-11"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Filtrando...
+                  </>
+                ) : (
+                  <>
+                    <Filter className="w-4 h-4 mr-2" />
+                    Filtrar
+                  </>
+                )}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -351,6 +604,12 @@ export default function Xmls() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b bg-muted/50">
+                        <th className="px-6 py-4 text-left text-sm font-semibold w-12">
+                          <Checkbox
+                            checked={xmls.length > 0 && xmls.every((xml) => selectedXmlIds.has(xml.id))}
+                            onCheckedChange={toggleSelectAll}
+                          />
+                        </th>
                         <th className="px-6 py-4 text-left text-sm font-semibold">
                           Tipo Doc
                         </th>
@@ -391,6 +650,12 @@ export default function Xmls() {
                           data-testid={`row-xml-${xml.id}`}
                         >
                           <td className="px-6 py-4">
+                            <Checkbox
+                              checked={selectedXmlIds.has(xml.id)}
+                              onCheckedChange={() => toggleXmlSelection(xml.id)}
+                            />
+                          </td>
+                          <td className="px-6 py-4">
                             <Badge variant="outline" className="font-mono w-fit">
                               {xml.tipoDoc}
                             </Badge>
@@ -415,7 +680,7 @@ export default function Xmls() {
                           </td>
                           <td className="px-6 py-4">
                             <div className="text-sm">
-                              <div className="font-medium">{xml.dataEmissao}</div>
+                              <div className="font-medium">{formatDateBR(xml.dataEmissao)}</div>
                               <div className="text-muted-foreground">{xml.hora}</div>
                             </div>
                           </td>
@@ -528,6 +793,83 @@ export default function Xmls() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Dialog de Envio de XMLs Selecionados */}
+      <Dialog open={sendSelectedDialogOpen} onOpenChange={setSendSelectedDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Enviar XMLs Selecionados por Email</DialogTitle>
+            <DialogDescription>
+              Enviar {selectedXmlIds.size} XML(s) selecionado(s) por email
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="email-from-selected">Emitente</Label>
+              <Input
+                id="email-from-selected"
+                value={currentCompany?.emailUser || ""}
+                disabled
+                className="bg-muted"
+              />
+              <p className="text-xs text-muted-foreground">
+                Email da empresa (não editável)
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-to-selected">Destinatário</Label>
+              <Input
+                id="email-to-selected"
+                type="email"
+                value={emailToSelected}
+                onChange={(e) => setEmailToSelected(e.target.value)}
+                placeholder="email@exemplo.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-subject-selected">Título (Assunto)</Label>
+              <Input
+                id="email-subject-selected"
+                value={emailSubjectSelected}
+                onChange={(e) => setEmailSubjectSelected(e.target.value)}
+                placeholder="Assunto do email"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="email-text-selected">Texto</Label>
+              <Textarea
+                id="email-text-selected"
+                value={emailTextSelected}
+                onChange={(e) => setEmailTextSelected(e.target.value)}
+                placeholder="Texto do email"
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSendSelectedDialogOpen(false)}
+              disabled={sendingSelected}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleSendSelected} disabled={sendingSelected}>
+              {sendingSelected ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Enviando...
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-2" />
+                  Enviar
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

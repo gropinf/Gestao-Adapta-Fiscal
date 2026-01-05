@@ -19,6 +19,7 @@ import * as contaboStorage from "./contaboStorage";
 import crypto from "crypto";
 import multer from "multer";
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import * as path from "path";
 import archiver from "archiver";
 
@@ -2650,7 +2651,7 @@ ${company.razaoSocial}
   // XMLs Routes
   app.get("/api/xmls", authMiddleware, async (req: AuthRequest, res) => {
     try {
-      const { companyId, tipoDoc, categoria, statusValidacao, search, tipo } = req.query;
+      const { companyId, tipoDoc, categoria, statusValidacao, search, tipo, dataInicio, dataFim } = req.query;
 
       if (!companyId) {
         return res.status(400).json({ error: "Company ID is required" });
@@ -2662,12 +2663,34 @@ ${company.razaoSocial}
         return res.status(404).json({ error: "Company not found" });
       }
 
+      // Validar e normalizar formato das datas (YYYY-MM-DD)
+      let dataInicioNormalizada: string | undefined;
+      let dataFimNormalizada: string | undefined;
+      
+      if (dataInicio) {
+        const dataInicioStr = (dataInicio as string).trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dataInicioStr)) {
+          return res.status(400).json({ error: "Formato de data inicial inválido. Use YYYY-MM-DD" });
+        }
+        dataInicioNormalizada = dataInicioStr;
+      }
+      
+      if (dataFim) {
+        const dataFimStr = (dataFim as string).trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dataFimStr)) {
+          return res.status(400).json({ error: "Formato de data final inválido. Use YYYY-MM-DD" });
+        }
+        dataFimNormalizada = dataFimStr;
+      }
+
       // Buscar XMLs pelo CNPJ (emitente OU destinatário)
       let xmlList = await storage.getXmlsByCnpj(company.cnpj, {
         tipoDoc: tipoDoc as string,
         categoria: categoria as string,
         statusValidacao: statusValidacao as string,
         search: search as string,
+        dataInicio: dataInicioNormalizada,
+        dataFim: dataFimNormalizada,
       });
 
       // Aplicar filtro de tipo (EMIT ou DEST) se fornecido
@@ -2732,6 +2755,375 @@ ${company.razaoSocial}
 
     } catch (error) {
       console.error("Get XML details error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/xmls/send-selected - Envia múltiplos XMLs selecionados por email
+  app.post("/api/xmls/send-selected", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { xmlIds, to, subject, text } = req.body;
+      const user = req.user!;
+
+      // Validações
+      if (!xmlIds || !Array.isArray(xmlIds) || xmlIds.length === 0) {
+        return res.status(400).json({ 
+          error: "Selecione pelo menos um XML para enviar" 
+        });
+      }
+
+      if (!to || !subject) {
+        return res.status(400).json({ 
+          error: "Campos obrigatórios: to (destinatário), subject (assunto)" 
+        });
+      }
+
+      // Validação de email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(to)) {
+        return res.status(400).json({ error: "Email de destino inválido" });
+      }
+
+      // Buscar XMLs
+      const xmls = [];
+      for (const id of xmlIds) {
+        const xml = await storage.getXml(id);
+        if (xml) {
+          xmls.push(xml);
+        }
+      }
+
+      if (xmls.length === 0) {
+        return res.status(404).json({ error: "Nenhum XML válido encontrado" });
+      }
+
+      // Buscar empresa pelo CNPJ do primeiro XML (todos devem ser da mesma empresa)
+      const firstXml = xmls[0];
+      const company = await storage.getCompanyByCnpj(firstXml.cnpjEmitente);
+      if (!company) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+
+      // Verificar se o usuário pode acessar a empresa
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === company.id);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      // Verificar se a empresa tem configuração de email
+      if (!company.emailHost || !company.emailUser || !company.emailPassword) {
+        return res.status(400).json({ 
+          error: "Empresa não possui configuração de email SMTP. Configure o email SMTP nas configurações da empresa." 
+        });
+      }
+
+      // Função para sanitizar nome de arquivo
+      const sanitizeFilename = (text: string): string => {
+        return text
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "") // Remove acentos
+          .replace(/[^a-zA-Z0-9\s]/g, "") // Remove caracteres especiais
+          .replace(/\s+/g, "_") // Substitui espaços por underscore
+          .toUpperCase();
+      };
+
+      // Função para formatar data para nome de arquivo (DDMMYYYY)
+      const formatDateFilename = (dateStr: string): string => {
+        if (!dateStr) return "";
+        const [year, month, day] = dateStr.split("-");
+        return `${day}${month}${year}`;
+      };
+
+      // Calcular datas inicial e final dos XMLs
+      const dates = xmls.map((xml) => xml.dataEmissao).sort();
+      const dataInicio = dates[0];
+      const dataFim = dates[dates.length - 1];
+
+      let attachments: Array<{ filename: string; content?: Buffer; path?: string }> = [];
+
+      if (xmls.length <= 10) {
+        // Se até 10 XMLs, enviar como anexos individuais
+        for (const xml of xmls) {
+          try {
+            const xmlBuffer = await fs.readFile(xml.filepath);
+            attachments.push({
+              filename: `NFe${xml.chave}.xml`,
+              content: xmlBuffer,
+            });
+          } catch (error) {
+            console.warn(`Erro ao ler arquivo XML ${xml.chave}:`, error);
+          }
+        }
+
+        if (attachments.length === 0) {
+          return res.status(500).json({ error: "Erro ao ler arquivos XML" });
+        }
+      } else {
+        // Se mais de 10 XMLs, compactar em ZIP
+        const xmlPaths: string[] = [];
+        for (const xml of xmls) {
+          try {
+            const xmlPath = path.resolve(xml.filepath);
+            await fs.access(xmlPath);
+            xmlPaths.push(xmlPath);
+          } catch (error) {
+            console.warn(`Arquivo XML não encontrado: ${xml.filepath}`);
+          }
+        }
+
+        if (xmlPaths.length === 0) {
+          return res.status(500).json({ error: "Erro ao ler arquivos XML" });
+        }
+
+        // Gerar nome do arquivo ZIP
+        const cnpj = company.cnpj;
+        const razaoSocial = sanitizeFilename(company.razaoSocial);
+        const dtInicio = formatDateFilename(dataInicio);
+        const dtFim = formatDateFilename(dataFim);
+        const zipFilename = `XMLs_${cnpj}_${razaoSocial}_${dtInicio}_A_${dtFim}.zip`;
+        const zipPath = path.join("/tmp", zipFilename);
+
+        // Criar arquivo ZIP
+        await new Promise<void>((resolve, reject) => {
+          const fsStream = fsSync.createWriteStream(zipPath);
+          const archive = archiver("zip", {
+            zlib: { level: 9 } // Máxima compressão
+          });
+
+          fsStream.on("close", () => {
+            console.log(`ZIP criado: ${archive.pointer()} bytes`);
+            resolve();
+          });
+
+          fsStream.on("error", (err: Error) => {
+            console.error("Erro no stream do arquivo ZIP:", err);
+            reject(err);
+          });
+
+          archive.on("error", (err: Error) => {
+            console.error("Erro ao criar arquivo ZIP:", err);
+            reject(err);
+          });
+
+          archive.pipe(fsStream);
+
+          // Adiciona cada XML ao arquivo
+          for (const xmlPath of xmlPaths) {
+            const filename = path.basename(xmlPath);
+            archive.file(xmlPath, { name: filename });
+          }
+
+          archive.finalize();
+        });
+
+        attachments.push({
+          filename: zipFilename,
+          path: zipPath,
+        });
+      }
+
+      // Enviar email com XMLs em anexo
+      const emailData = {
+        to,
+        subject,
+        text: text || "Anexo Nota Fiscal",
+        html: text ? `
+          <!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+              }
+            </style>
+          </head>
+          <body>
+            ${text.replace(/\n/g, "<br>")}
+          </body>
+          </html>
+        ` : getXmlEmailTemplate({
+          companyName: company.razaoSocial,
+          xmlCount: xmls.length,
+        }).html,
+        attachments,
+      };
+
+      const result = await sendEmail(company, emailData);
+
+      if (!result.success) {
+        // Remover arquivo ZIP temporário mesmo em caso de erro
+        if (xmls.length > 10 && attachments[0]?.path) {
+          try {
+            await fs.unlink(attachments[0].path);
+          } catch (err) {
+            console.warn("Erro ao remover arquivo ZIP temporário:", err);
+          }
+        }
+        return res.status(500).json({ 
+          error: result.error || "Erro ao enviar email" 
+        });
+      }
+
+      // Remover arquivo ZIP temporário após envio bem-sucedido
+      if (xmls.length > 10 && attachments[0]?.path) {
+        try {
+          await fs.unlink(attachments[0].path);
+        } catch (err) {
+          console.warn("Erro ao remover arquivo ZIP temporário:", err);
+        }
+      }
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "send_xml_email",
+        details: JSON.stringify({
+          xmlIds,
+          xmlCount: xmls.length,
+          companyId: company.id,
+          destinationEmail: to,
+          subject,
+          isZipped: xmls.length > 10,
+        }),
+      });
+
+      res.json({
+        success: true,
+        messageId: result.messageId,
+        xmlCount: xmls.length,
+      });
+    } catch (error) {
+      console.error("Send selected XMLs email error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/xmls/:id/send-email - Envia XML individual por email
+  app.post("/api/xmls/:id/send-email", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { to, subject, text } = req.body;
+      const user = req.user!;
+
+      // Validações
+      if (!to || !subject) {
+        return res.status(400).json({ 
+          error: "Campos obrigatórios: to (destinatário), subject (assunto)" 
+        });
+      }
+
+      // Validação de email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(to)) {
+        return res.status(400).json({ error: "Email de destino inválido" });
+      }
+
+      // Buscar XML
+      const xml = await storage.getXml(id);
+      if (!xml) {
+        return res.status(404).json({ error: "XML not found" });
+      }
+
+      // Buscar empresa pelo CNPJ do emitente (companyId pode ser null/deprecated)
+      const company = await storage.getCompanyByCnpj(xml.cnpjEmitente);
+      if (!company) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+
+      // Verificar se o usuário pode acessar a empresa
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === company.id);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      // Verificar se a empresa tem configuração de email
+      if (!company.emailHost || !company.emailUser || !company.emailPassword) {
+        return res.status(400).json({ 
+          error: "Empresa não possui configuração de email SMTP. Configure o email SMTP nas configurações da empresa." 
+        });
+      }
+
+      // Ler arquivo XML como buffer binário (não como texto)
+      const xmlBuffer = await fs.readFile(xml.filepath);
+
+      // Enviar email com XML em anexo
+      const emailData = {
+        to,
+        subject,
+        text: text || "Anexo Nota Fiscal",
+        html: text ? `
+          <!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+              }
+            </style>
+          </head>
+          <body>
+            ${text.replace(/\n/g, "<br>")}
+          </body>
+          </html>
+        ` : getXmlEmailTemplate({
+          companyName: company.razaoSocial,
+          xmlCount: 1,
+        }).html,
+        attachments: [
+          {
+            filename: `NFe${xml.chave}.xml`,
+            content: xmlBuffer,
+          },
+        ],
+      };
+
+      const result = await sendEmail(company, emailData);
+
+      if (!result.success) {
+        return res.status(500).json({ 
+          error: result.error || "Erro ao enviar email" 
+        });
+      }
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "send_xml_email",
+        details: JSON.stringify({
+          xmlId: id,
+          xmlChave: xml.chave,
+          companyId: xml.companyId,
+          destinationEmail: to,
+          subject,
+        }),
+      });
+
+      res.json({
+        success: true,
+        messageId: result.messageId,
+      });
+    } catch (error) {
+      console.error("Send XML email error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

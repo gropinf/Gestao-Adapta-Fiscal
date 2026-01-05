@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { getAuthHeader } from "@/lib/auth";
-import { Loader2, Mail, CheckCircle2, AlertCircle, Send } from "lucide-react";
+import { Loader2, Mail, CheckCircle2, AlertCircle, Send, Eye, EyeOff } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Company } from "@shared/schema";
 
@@ -27,6 +27,7 @@ export function CompanyEmailConfigTab({ company }: CompanyEmailConfigTabProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [testing, setTesting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   
   // Busca empresa atualizada do cache
   const updatedCompany = queryClient.getQueryData<Company[]>(["/api/companies"])?.find(c => c.id === company.id) || company;
@@ -88,8 +89,17 @@ export function CompanyEmailConfigTab({ company }: CompanyEmailConfigTabProps) {
   const handleTestConnection = async () => {
     setTesting(true);
     try {
-      // Primeiro salva as configurações
-      await updateMutation.mutateAsync(formData);
+      // Prepara dados para salvar (senha só se foi alterada)
+      const dataToSend = { ...formData };
+      if (!dataToSend.emailPassword && updatedCompany.emailPassword) {
+        // Remove senha do objeto se não foi alterada
+        delete (dataToSend as any).emailPassword;
+      }
+
+      // Primeiro salva as configurações (se houver alterações)
+      if (dataToSend.emailHost || dataToSend.emailPort !== 587 || dataToSend.emailUser || dataToSend.emailPassword) {
+        await updateMutation.mutateAsync(dataToSend);
+      }
 
       // Depois testa a conexão
       const res = await fetch(`/api/email/test`, {
@@ -137,7 +147,14 @@ export function CompanyEmailConfigTab({ company }: CompanyEmailConfigTabProps) {
     updateMutation.mutate(dataToSend);
   };
 
-  const hasConfig = !!(formData.emailHost && formData.emailPort && formData.emailUser && formData.emailPassword);
+  // Considera configuração completa se todos os campos obrigatórios estão preenchidos
+  // OU se já existe senha configurada (não precisa digitar novamente)
+  const hasConfig = !!(
+    formData.emailHost && 
+    formData.emailPort && 
+    formData.emailUser && 
+    (formData.emailPassword || updatedCompany.emailPassword)
+  );
 
   return (
     <div className="space-y-6">
@@ -227,14 +244,28 @@ export function CompanyEmailConfigTab({ company }: CompanyEmailConfigTabProps) {
 
             <div className="space-y-2">
               <Label htmlFor="emailPassword">Senha *</Label>
-              <Input
-                id="emailPassword"
-                type="password"
-                value={formData.emailPassword}
-                onChange={(e) => setFormData({ ...formData, emailPassword: e.target.value })}
-                placeholder={updatedCompany.emailPassword ? "Digite nova senha para alterar" : "Senha do email ou senha de aplicativo"}
-                className="h-11"
-              />
+              <div className="relative">
+                <Input
+                  id="emailPassword"
+                  type={showPassword ? "text" : "password"}
+                  value={formData.emailPassword}
+                  onChange={(e) => setFormData({ ...formData, emailPassword: e.target.value })}
+                  placeholder={updatedCompany.emailPassword ? "Digite nova senha para alterar" : "Senha do email ou senha de aplicativo"}
+                  className="h-11 pr-12"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-md hover:bg-muted/50"
+                  tabIndex={-1}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
               {updatedCompany.emailPassword && !formData.emailPassword && (
                 <p className="text-xs text-blue-600">
                   ℹ️ Senha já configurada. Digite uma nova senha apenas se desejar alterá-la.
