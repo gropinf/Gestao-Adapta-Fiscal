@@ -450,7 +450,7 @@ A funcionalidade de **Envio de XMLs por Email para Contabilidade** está **100% 
 
 **Desenvolvido por:** Claude (Anthropic)  
 **Data:** 06/11/2025  
-**Projeto:** Adapta Fiscal v1.0  
+**Projeto:** Adapta Fiscal v1.2  
 **Status:** ✅ Completo
 
 

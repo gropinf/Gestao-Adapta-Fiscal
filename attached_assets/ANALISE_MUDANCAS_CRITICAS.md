@@ -23,7 +23,7 @@ Este documento analisa **BREAKING CHANGES** e **CONFLITOS POTENCIAIS** entre o s
 
 ## 🚨 MUDANÇA CRÍTICA #1: UPLOAD SEM `company_id`
 
-### **Situação Atual (v1.0):**
+### **Situação Atual (v1.2):**
 ```typescript
 // server/routes.ts - Upload atual
 app.post('/api/upload', async (req, res) => {

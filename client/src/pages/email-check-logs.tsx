@@ -62,27 +62,20 @@ export default function EmailCheckLogs() {
   const [filterDateTo, setFilterDateTo] = useState<string>("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Fetch email monitors for filter
+  // Fetch email monitors for filter (apenas admin - funcionalidade global)
   const { data: monitors = [] } = useQuery<EmailMonitor[]>({
     queryKey: ["email-monitors-all"],
     queryFn: async () => {
-      if (!user) return [];
+      if (!user || user.role !== "admin") return [];
       
-      // Admin vê todos os monitores, usuários comuns veem apenas das suas empresas
-      const companies = await fetch("/api/companies", {
+      // Admin vê todos os monitores (funcionalidade global)
+      const res = await fetch("/api/email-monitors", {
         headers: getAuthHeader(),
-      }).then(res => res.json());
-
-      const allMonitors: EmailMonitor[] = [];
-      for (const company of companies) {
-        const monitors = await fetch(`/api/email-monitors?companyId=${company.id}`, {
-          headers: getAuthHeader(),
-        }).then(res => res.json());
-        allMonitors.push(...monitors);
-      }
-
-      return allMonitors;
+      });
+      if (!res.ok) return [];
+      return res.json();
     },
+    enabled: !!user && user.role === "admin",
   });
 
   // Fetch email check logs

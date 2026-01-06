@@ -162,8 +162,8 @@ export const alerts = pgTable("alerts", {
 // Email Monitors table - Monitoramento de email (IMAP) para download automático de XMLs
 export const emailMonitors = pgTable("email_monitors", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-  email: varchar("email", { length: 255 }).notNull(),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }), // Nullable - Monitor é global
+  email: varchar("email", { length: 255 }).notNull().unique(), // Email único - não permite duplicatas
   password: text("password").notNull(), // Encrypted
   host: varchar("host", { length: 255 }).notNull(),
   port: integer("port").notNull(),

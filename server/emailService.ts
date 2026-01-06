@@ -12,6 +12,7 @@ export interface EmailConfig {
     user: string;
     pass: string;
   };
+  requireTLS?: boolean; // Requer TLS via STARTTLS (para porta 587)
 }
 
 /**
@@ -33,12 +34,19 @@ export interface EmailData {
  * Cria um transporter do Nodemailer baseado na config da empresa
  */
 export function createTransporter(config: EmailConfig) {
-  return nodemailer.createTransport({
+  const transporterConfig: any = {
     host: config.host,
     port: config.port,
     secure: config.secure,
     auth: config.auth,
-  });
+  };
+
+  // Adicionar requireTLS se especificado
+  if (config.requireTLS !== undefined) {
+    transporterConfig.requireTLS = config.requireTLS;
+  }
+
+  return nodemailer.createTransport(transporterConfig);
 }
 
 /**
@@ -49,14 +57,42 @@ export function createTransporterFromCompany(company: Company) {
     throw new Error("Configuração de email incompleta para esta empresa");
   }
 
+  const port = company.emailPort || 587;
+  const useSsl = company.emailSsl ?? true; // Padrão: usar SSL/TLS
+  
+  // Lógica do Nodemailer para SMTP:
+  // - secure: true = SSL/TLS direto (porta 465)
+  // - secure: false = STARTTLS (porta 587) - também é seguro, mas inicia sem SSL
+  // 
+  // Quando usuário marca "Usar SSL/TLS":
+  // - Porta 465: secure = true (SSL direto)
+  // - Porta 587: secure = false mas requireTLS = true (STARTTLS - inicia sem SSL, depois negocia TLS)
+  // - Outras portas: secure = useSsl (usa o valor configurado)
+  
+  let secure: boolean;
+  let requireTLS: boolean | undefined;
+  
+  if (port === 465) {
+    // Porta 465 sempre usa SSL direto quando SSL está ativado
+    secure = useSsl;
+  } else if (port === 587) {
+    // Porta 587 usa STARTTLS (secure: false, mas requireTLS: true quando SSL está ativado)
+    secure = false;
+    requireTLS = useSsl; // Se SSL está ativado, requer TLS via STARTTLS
+  } else {
+    // Para outras portas, usa o valor configurado diretamente
+    secure = useSsl;
+  }
+
   return createTransporter({
     host: company.emailHost,
-    port: company.emailPort || 587,
-    secure: company.emailSsl ?? true,
+    port: port,
+    secure: secure,
     auth: {
       user: company.emailUser,
       pass: company.emailPassword,
     },
+    requireTLS: requireTLS,
   });
 }
 

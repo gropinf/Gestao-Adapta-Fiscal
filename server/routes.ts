@@ -1868,15 +1868,11 @@ ${company.razaoSocial}
   // Email Monitors Routes - Monitoramento de Email (IMAP)
   
   // Get email monitors by company
-  app.get("/api/email-monitors", authMiddleware, async (req: AuthRequest, res) => {
+  // Get all email monitors (admin only - global functionality)
+  app.get("/api/email-monitors", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
-      const { companyId } = req.query;
-
-      if (!companyId) {
-        return res.status(400).json({ error: "Company ID is required" });
-      }
-
-      const monitors = await storage.getEmailMonitorsByCompany(companyId as string);
+      // Lista todos os monitores (funcionalidade global)
+      const monitors = await storage.getAllEmailMonitors();
       res.json(monitors);
 
     } catch (error) {
@@ -1904,26 +1900,40 @@ ${company.razaoSocial}
     }
   });
 
-  // Create email monitor
+  // Create email monitor (admin only - global functionality)
   app.post("/api/email-monitors", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
       const { companyId, email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes } = req.body;
 
-      if (!companyId || !email || !password || !host || !port) {
-        return res.status(400).json({ error: "All fields are required" });
+      // companyId não é mais obrigatório (monitor é global)
+      if (!email || !password || !host || !port) {
+        return res.status(400).json({ error: "Email, password, host e port são obrigatórios" });
+      }
+
+      // Normalizar email (lowercase e trim)
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Verificar se email já existe
+      const existingMonitor = await storage.getEmailMonitorByEmail(normalizedEmail);
+      if (existingMonitor) {
+        return res.status(400).json({ 
+          error: "Email já cadastrado",
+          message: `O email ${normalizedEmail} já está cadastrado em outro monitor.` 
+        });
       }
 
       console.log('[Email Monitor] Criando monitor:', {
-        email,
+        email: normalizedEmail,
         host,
         port,
+        companyId: companyId || 'NULL (global)',
         monitorSince: monitorSince || 'NULL',
         checkIntervalMinutes: checkIntervalMinutes ?? 15,
       });
 
       const monitor = await storage.createEmailMonitor({
-        companyId,
-        email,
+        companyId: companyId || null, // Opcional - monitor é global
+        email: normalizedEmail,
         password, // TODO: Encrypt password before storing
         host,
         port,
@@ -1936,7 +1946,7 @@ ${company.razaoSocial}
       await storage.logAction({
         userId: req.user!.id,
         action: "create_email_monitor",
-        details: JSON.stringify({ monitorId: monitor.id, companyId, email }),
+        details: JSON.stringify({ monitorId: monitor.id, email, companyId: companyId || null }),
       });
 
       res.status(201).json(monitor);
@@ -1953,6 +1963,26 @@ ${company.razaoSocial}
       const { id } = req.params;
       const { email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes } = req.body;
 
+      // Verificar se monitor existe
+      const existingMonitor = await storage.getEmailMonitor(id);
+      if (!existingMonitor) {
+        return res.status(404).json({ error: "Email monitor not found" });
+      }
+
+      // Se email está sendo alterado, verificar se não existe em outro monitor
+      if (email) {
+        const normalizedEmail = email.toLowerCase().trim();
+        const monitorWithEmail = await storage.getEmailMonitorByEmail(normalizedEmail);
+        
+        // Se encontrou um monitor com esse email E não é o mesmo que está sendo editado
+        if (monitorWithEmail && monitorWithEmail.id !== id) {
+          return res.status(400).json({ 
+            error: "Email já cadastrado",
+            message: `O email ${normalizedEmail} já está cadastrado em outro monitor.` 
+          });
+        }
+      }
+
       console.log('[Email Monitor] Atualizando monitor:', {
         id,
         email,
@@ -1961,7 +1991,7 @@ ${company.razaoSocial}
       });
 
       const updateData: any = {};
-      if (email) updateData.email = email;
+      if (email) updateData.email = email.toLowerCase().trim();
       if (password) updateData.password = password; // TODO: Encrypt password
       if (host) updateData.host = host;
       if (port) updateData.port = port;

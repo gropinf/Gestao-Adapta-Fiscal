@@ -44,7 +44,7 @@ interface SequenceSummary {
   primeiroNumero: number | null;
   ultimoNumero: number | null;
   modelo: string;
-  periodo: {
+  periodo?: {
     inicio: string;
     fim: string;
   };
@@ -147,7 +147,9 @@ export default function AnaliseSequenciaPage() {
     if (!summary || sequence.length === 0) return;
 
     let text = `ANÁLISE DE SEQUÊNCIA - ${summary.modelo}\n`;
-    text += `Período: ${formatDateBR(summary.periodo.inicio)} a ${formatDateBR(summary.periodo.fim)}\n\n`;
+    if (summary.periodo) {
+      text += `Período: ${formatDateBR(summary.periodo.inicio)} a ${formatDateBR(summary.periodo.fim)}\n\n`;
+    }
     text += `RESUMO:\n`;
     text += `Total Emitidas: ${summary.totalEmitidas}\n`;
     text += `Total Inutilizadas: ${summary.totalInutilizadas}\n`;
@@ -284,8 +286,11 @@ export default function AnaliseSequenciaPage() {
                 </Button>
               </div>
               <CardDescription>
-                {summary.modelo} - {formatDateBR(summary.periodo.inicio)} a{" "}
-                {formatDateBR(summary.periodo.fim)}
+                {summary.modelo}
+                {summary.periodo && (
+                  <> - {formatDateBR(summary.periodo.inicio)} a{" "}
+                  {formatDateBR(summary.periodo.fim)}</>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent>

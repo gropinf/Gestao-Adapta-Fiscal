@@ -110,7 +110,9 @@ export interface IStorage {
   
   // Email Monitors
   getEmailMonitor(id: string): Promise<EmailMonitor | undefined>;
+  getEmailMonitorByEmail(email: string): Promise<EmailMonitor | undefined>;
   getEmailMonitorsByCompany(companyId: string): Promise<EmailMonitor[]>;
+  getAllEmailMonitors(): Promise<EmailMonitor[]>;
   getAllActiveEmailMonitors(): Promise<EmailMonitor[]>;
   createEmailMonitor(monitor: InsertEmailMonitor): Promise<EmailMonitor>;
   updateEmailMonitor(id: string, monitor: Partial<InsertEmailMonitor>): Promise<EmailMonitor | undefined>;
@@ -625,12 +627,28 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(emailMonitors.createdAt));
   }
 
+  async getAllEmailMonitors(): Promise<EmailMonitor[]> {
+    return await db
+      .select()
+      .from(emailMonitors)
+      .orderBy(desc(emailMonitors.createdAt));
+  }
+
   async getAllActiveEmailMonitors(): Promise<EmailMonitor[]> {
     return await db
       .select()
       .from(emailMonitors)
       .where(eq(emailMonitors.active, true))
       .orderBy(desc(emailMonitors.createdAt));
+  }
+
+  async getEmailMonitorByEmail(email: string): Promise<EmailMonitor | undefined> {
+    const [monitor] = await db
+      .select()
+      .from(emailMonitors)
+      .where(eq(emailMonitors.email, email.toLowerCase().trim()))
+      .limit(1);
+    return monitor || undefined;
   }
 
   async createEmailMonitor(monitor: InsertEmailMonitor): Promise<EmailMonitor> {

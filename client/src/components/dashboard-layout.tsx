@@ -85,6 +85,7 @@ const menuItems = [
     title: "Monitor de Email",
     url: "/configuracoes/email-monitor",
     icon: Mail,
+    adminOnly: true, // Apenas para admin - funcionalidade global
   },
   {
     title: "Logs de Verificação",
@@ -106,6 +107,16 @@ const menuItems = [
 
 function AppSidebar() {
   const [location] = useLocation();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === "admin";
+
+  // Filtrar itens do menu baseado no perfil do usuário
+  const filteredMenuItems = menuItems.filter((item) => {
+    if (item.adminOnly && !isAdmin) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <Sidebar>
@@ -121,13 +132,13 @@ function AppSidebar() {
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg">Adapta Fiscal</span>
-              <span className="text-xs text-muted-foreground">v1.0</span>
+              <span className="text-xs text-muted-foreground">v1.2</span>
             </div>
           </div>
           <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
+              {filteredMenuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild

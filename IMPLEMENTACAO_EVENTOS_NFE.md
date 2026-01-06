@@ -573,7 +573,7 @@ O sistema agora suporta completamente:
 
 **Desenvolvido por:** Claude (Anthropic)  
 **Data:** 07/11/2025  
-**Projeto:** Adapta Fiscal v1.0  
+**Projeto:** Adapta Fiscal v1.2  
 **Status:** ✅ Completo e Testado
 
 

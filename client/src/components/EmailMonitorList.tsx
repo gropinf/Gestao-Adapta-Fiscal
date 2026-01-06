@@ -34,7 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Mail, Plus, Edit, Trash2, Loader2, CheckCircle2, XCircle, TestTube, Info, PlayCircle } from "lucide-react";
+import { Mail, Plus, Edit, Trash2, Loader2, CheckCircle2, XCircle, TestTube, Info, PlayCircle, Eye, EyeOff } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -53,11 +53,8 @@ interface EmailMonitor {
   createdAt: string;
 }
 
-interface EmailMonitorListProps {
-  companyId: string;
-}
-
-export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
+// Monitor de email é funcionalidade global (não vinculada a empresa)
+export function EmailMonitorList() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   
@@ -67,6 +64,8 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
   const [selectedMonitor, setSelectedMonitor] = useState<EmailMonitor | null>(null);
   const [isTesting, setIsTesting] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -79,24 +78,23 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
     checkIntervalMinutes: 15, // Intervalo padrão: 15 minutos
   });
 
-  // Fetch email monitors
+  // Fetch email monitors (todos - funcionalidade global)
   const { data: monitors = [], isLoading } = useQuery<EmailMonitor[]>({
-    queryKey: ["email-monitors", companyId],
+    queryKey: ["email-monitors"],
     queryFn: async () => {
-      const res = await fetch(`/api/email-monitors?companyId=${companyId}`, {
+      const res = await fetch(`/api/email-monitors`, {
         headers: getAuthHeader(),
       });
       if (!res.ok) throw new Error("Erro ao carregar monitores de email");
       return res.json();
     },
-    enabled: !!companyId,
   });
 
   // Create mutation
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       const payload = {
-        companyId,
+        // companyId removido - monitor é global
         email: data.email,
         password: data.password,
         host: data.host,
@@ -106,6 +104,13 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
         checkIntervalMinutes: data.checkIntervalMinutes,
       };
       
+      // Verificar se email já existe antes de enviar
+      const normalizedEmail = data.email.toLowerCase().trim();
+      const existingMonitor = monitors.find(m => m.email.toLowerCase().trim() === normalizedEmail);
+      if (existingMonitor) {
+        throw new Error(`O email ${normalizedEmail} já está cadastrado em outro monitor.`);
+      }
+
       const res = await fetch("/api/email-monitors", {
         method: "POST",
         headers: {
@@ -116,13 +121,14 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
       });
       if (!res.ok) {
         const error = await res.json();
-        throw new Error(error.error || "Erro ao criar monitor");
+        throw new Error(error.message || error.error || "Erro ao criar monitor");
       }
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["email-monitors", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["email-monitors"] });
       setIsAddDialogOpen(false);
+      setShowPassword(false);
       resetForm();
       toast({
         title: "Monitor criado!",
@@ -141,6 +147,17 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
   // Update mutation
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<typeof formData> }) => {
+      // Se email está sendo alterado, verificar se não existe em outro monitor
+      if (data.email) {
+        const normalizedEmail = data.email.toLowerCase().trim();
+        const existingMonitor = monitors.find(
+          m => m.email.toLowerCase().trim() === normalizedEmail && m.id !== id
+        );
+        if (existingMonitor) {
+          throw new Error(`O email ${normalizedEmail} já está cadastrado em outro monitor.`);
+        }
+      }
+
       const res = await fetch(`/api/email-monitors/${id}`, {
         method: "PUT",
         headers: {
@@ -151,14 +168,15 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
       });
       if (!res.ok) {
         const error = await res.json();
-        throw new Error(error.error || "Erro ao atualizar monitor");
+        throw new Error(error.message || error.error || "Erro ao atualizar monitor");
       }
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["email-monitors", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["email-monitors"] });
       setIsEditDialogOpen(false);
       setSelectedMonitor(null);
+      setShowEditPassword(false);
       resetForm();
       toast({
         title: "Monitor atualizado!",
@@ -184,7 +202,7 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
       if (!res.ok) throw new Error("Erro ao deletar monitor");
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["email-monitors", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["email-monitors"] });
       setIsDeleteDialogOpen(false);
       setSelectedMonitor(null);
       toast({
@@ -265,7 +283,7 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
         });
         
         // Recarregar lista de monitores para atualizar "Última Verificação"
-        queryClient.invalidateQueries({ queryKey: ["email-monitors", companyId] });
+        queryClient.invalidateQueries({ queryKey: ["email-monitors"] });
       } else {
         toast({
           title: "Erro na verificação",
@@ -468,7 +486,13 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
       )}
 
       {/* Add Dialog */}
-      <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+      <Dialog open={isAddDialogOpen} onOpenChange={(open) => {
+        setIsAddDialogOpen(open);
+        if (!open) {
+          setShowPassword(false);
+          resetForm();
+        }
+      }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Adicionar Monitor de Email</DialogTitle>
@@ -502,13 +526,33 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
 
             <div className="space-y-2">
               <Label htmlFor="password">Senha *</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              />
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setShowPassword(!showPassword);
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-md hover:bg-muted/50"
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 💡 Gmail: Use "Senha de App" (não a senha normal)
               </p>
@@ -582,7 +626,11 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+            <Button variant="outline" onClick={() => {
+              setIsAddDialogOpen(false);
+              setShowPassword(false);
+              resetForm();
+            }}>
               Cancelar
             </Button>
             <Button onClick={() => createMutation.mutate(formData)} disabled={createMutation.isPending}>
@@ -600,7 +648,14 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
       </Dialog>
 
       {/* Edit Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+        setIsEditDialogOpen(open);
+        if (!open) {
+          setShowEditPassword(false);
+          setSelectedMonitor(null);
+          resetForm();
+        }
+      }}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Editar Monitor de Email</DialogTitle>
@@ -633,13 +688,33 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
 
             <div className="space-y-2">
               <Label htmlFor="edit-password">Nova Senha (deixe em branco para manter)</Label>
-              <Input
-                id="edit-password"
-                type="password"
-                placeholder="••••••••"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              />
+              <div className="relative">
+                <Input
+                  id="edit-password"
+                  type={showEditPassword ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setShowEditPassword(!showEditPassword);
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors p-1.5 rounded-md hover:bg-muted/50"
+                  tabIndex={-1}
+                  aria-label={showEditPassword ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showEditPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -708,7 +783,12 @@ export function EmailMonitorList({ companyId }: EmailMonitorListProps) {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+            <Button variant="outline" onClick={() => {
+              setIsEditDialogOpen(false);
+              setShowEditPassword(false);
+              setSelectedMonitor(null);
+              resetForm();
+            }}>
               Cancelar
             </Button>
             <Button
