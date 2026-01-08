@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Upload, Scan, Loader2, CheckCircle2, XCircle, Info } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { getAuthHeader } from '@/lib/auth';
 
 export default function ContaboStoragePage() {
   const { toast } = useToast();
@@ -24,9 +25,11 @@ export default function ContaboStoragePage() {
       const response = await fetch('/api/storage/migrate-production', {
         method: 'POST',
         headers: {
+          ...getAuthHeader(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({}),
+        credentials: 'include',
       });
 
       const data = await response.json();
@@ -65,8 +68,10 @@ export default function ContaboStoragePage() {
       const response = await fetch('/api/storage/scan-and-import', {
         method: 'POST',
         headers: {
+          ...getAuthHeader(),
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
       });
 
       const data = await response.json();
