@@ -168,3 +168,4 @@ O resultado deve mostrar `is_nullable = 'YES'`.
 A migration é segura e não remove dados, apenas torna o campo `company_id` opcional.
 
 
+

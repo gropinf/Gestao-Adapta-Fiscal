@@ -2,6 +2,7 @@ import { gerarPDF } from '@alexssmusica/node-pdf-nfe';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { readXmlContent } from './xmlReaderService';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,16 +23,39 @@ if (!fs.existsSync(DANFE_DIR)) {
  */
 export const gerarDanfe = async (xmlPath: string, logoPath?: string | null): Promise<string> => {
   try {
-    // Verificar se o XML existe
-    if (!fs.existsSync(xmlPath)) {
-      throw new Error(`Arquivo XML não encontrado: ${xmlPath}`);
-    }
-
-    // Ler conteúdo do XML
-    const xmlContent = fs.readFileSync(xmlPath, 'utf-8');
+    // Ler conteúdo do XML (do sistema local ou Contabo)
+    let xmlContent: string;
     
-    // Extrair a chave do nome do arquivo
-    const chave = path.basename(xmlPath, '.xml');
+    if (xmlPath.startsWith('http://') || xmlPath.startsWith('https://')) {
+      // É URL do Contabo - baixa do storage
+      xmlContent = await readXmlContent(xmlPath) || '';
+      if (!xmlContent) {
+        throw new Error(`Arquivo XML não encontrado no Contabo: ${xmlPath}`);
+      }
+      // Extrair chave da URL (última parte antes de .xml)
+      const urlParts = xmlPath.split('/');
+      const fileName = urlParts[urlParts.length - 1];
+      const chave = fileName.replace('.xml', '').replace('NFe', '');
+    } else {
+      // É caminho local - verifica se existe
+      if (!fs.existsSync(xmlPath)) {
+        throw new Error(`Arquivo XML não encontrado: ${xmlPath}`);
+      }
+      xmlContent = fs.readFileSync(xmlPath, 'utf-8');
+    }
+    
+    // Extrair a chave do XML (do conteúdo ou do caminho)
+    let chave: string;
+    if (xmlPath.startsWith('http://') || xmlPath.startsWith('https://')) {
+      // Extrair da URL
+      const urlParts = xmlPath.split('/');
+      const fileName = urlParts[urlParts.length - 1];
+      chave = fileName.replace('.xml', '').replace('NFe', '');
+    } else {
+      // Extrair do nome do arquivo
+      chave = path.basename(xmlPath, '.xml').replace('NFe', '');
+    }
+    
     const pdfPath = path.join(DANFE_DIR, `${chave}-DANFE.pdf`);
 
     // Evitar regerar se já existe

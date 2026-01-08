@@ -23,6 +23,7 @@ import ResetPassword from "@/pages/reset-password";
 import RequestAccess from "@/pages/request-access";
 import AuditoriaAcessos from "@/pages/auditoria-acessos";
 import Perfil from "@/pages/perfil";
+import ContaboStorage from "@/pages/contabo-storage";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -47,6 +48,7 @@ function Router() {
       <Route path="/envio-xml-email" component={EnvioXmlEmail} />
       <Route path="/auditoria/acessos" component={AuditoriaAcessos} />
       <Route path="/perfil" component={Perfil} />
+      <Route path="/contabo-storage" component={ContaboStorage} />
       <Route component={NotFound} />
     </Switch>
   );

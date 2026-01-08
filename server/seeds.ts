@@ -2,6 +2,7 @@ import { db } from "./db";
 import { users, companies, companyUsers, accountants, accountantCompanies, xmls, alerts } from "@shared/schema";
 import { hashPassword } from "./auth";
 import { saveToValidated } from "./fileStorage";
+import { saveXmlToContabo } from "./xmlStorageService";
 import { eq } from "drizzle-orm";
 
 /**
@@ -350,17 +351,37 @@ export async function runSeeds() {
   </NFe>
 </nfeProc>`;
 
-        // Salva no storage
-        const saveResult = await saveToValidated(xmlContent, xmlData.chave);
-        
-        if (saveResult.success) {
-          // Salva no banco
-          await db.insert(xmls).values({
-            ...xmlData,
-            filepath: saveResult.filepath || "",
-          });
-          xmlsCreated++;
-          console.log(`   ✅ XML criado: ${xmlData.chave.substring(0, 12)}... (${xmlData.categoria})`);
+        // Salva no Contabo Storage
+        // Precisamos parsear o XML para obter os dados necessários
+        try {
+          const { parseXmlContent } = await import('./xmlParser');
+          const parsedXml = await parseXmlContent(xmlContent);
+          
+          const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
+          
+          if (saveResult.success) {
+            // Salva no banco
+            await db.insert(xmls).values({
+              ...xmlData,
+              filepath: saveResult.filepath || "",
+            });
+            xmlsCreated++;
+            console.log(`   ✅ XML criado e salvo no Contabo: ${xmlData.chave.substring(0, 12)}... (${xmlData.categoria})`);
+          } else {
+            console.error(`   ❌ Erro ao salvar XML no Contabo: ${saveResult.error}`);
+          }
+        } catch (parseError) {
+          console.error(`   ❌ Erro ao parsear XML para seed:`, parseError);
+          // Fallback: salva no sistema local se falhar
+          const saveResult = await saveToValidated(xmlContent, xmlData.chave);
+          if (saveResult.success) {
+            await db.insert(xmls).values({
+              ...xmlData,
+              filepath: saveResult.filepath || "",
+            });
+            xmlsCreated++;
+            console.log(`   ⚠️  XML criado no sistema local (fallback): ${xmlData.chave.substring(0, 12)}...`);
+          }
         }
       }
     }

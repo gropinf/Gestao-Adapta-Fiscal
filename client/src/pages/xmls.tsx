@@ -246,15 +246,9 @@ export default function Xmls() {
       return;
     }
 
-    // Calcular data inicial e final dos XMLs selecionados
-    const selectedXmls = xmls.filter((xml) => selectedXmlIds.has(xml.id));
-    if (selectedXmls.length === 0) {
-      return;
-    }
-
-    const dates = selectedXmls.map((xml) => xml.dataEmissao).sort();
-    const dataInicio = dates[0];
-    const dataFim = dates[dates.length - 1];
+    // Usar as datas do filtro aplicado (ou as datas dos campos se não houver filtro)
+    const dataInicio = appliedFilters?.dataInicio || dataInicial;
+    const dataFim = appliedFilters?.dataFim || dataFinal;
 
     // Formatar datas para exibição
     const formatDateForText = (dateStr: string) => {

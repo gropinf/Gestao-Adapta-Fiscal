@@ -259,3 +259,4 @@ O **Monitor de Email** está parcialmente implementado como funcionalidade globa
 A funcionalidade deve processar XMLs de **qualquer empresa**, associando-os automaticamente pelo CNPJ do emitente, independente da empresa que o usuário admin está visualizando no momento.
 
 
+

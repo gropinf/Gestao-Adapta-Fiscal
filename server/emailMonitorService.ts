@@ -3,6 +3,7 @@ import { simpleParser } from 'mailparser';
 import { storage } from './storage';
 import { parseXmlContent, isValidNFeXml } from './xmlParser';
 import { saveToValidated } from './fileStorage';
+import { saveXmlToContabo } from './xmlStorageService';
 import { getOrCreateCompanyByCnpj } from './utils/companyAutoCreate';
 import type { EmailMonitor } from '@shared/schema';
 
@@ -183,10 +184,10 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
               categoria = "emitida"; // Padrão
             }
 
-            // Salvar XML no storage
-            const saveResult = await saveToValidated(xmlContent, parsedXml.chave);
+            // Salvar XML no Contabo Storage
+            const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
             if (!saveResult.success) {
-              result.errors.push(`${filename}: Erro ao salvar no storage`);
+              result.errors.push(`${filename}: Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
               continue;
             }
 

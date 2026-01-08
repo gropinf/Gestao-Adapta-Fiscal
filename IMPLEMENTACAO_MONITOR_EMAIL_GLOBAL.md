@@ -102,3 +102,4 @@
 Todas as mudanças foram implementadas e testadas (sem erros de lint). A funcionalidade agora está completamente global e restrita a administradores.
 
 
+

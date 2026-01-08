@@ -88,6 +88,25 @@ export function extractChaveAcessoFromXml(xmlContent: string): string | null {
   return null;
 }
 
+export function extractCnpjEmitenteFromXml(xmlContent: string): string | null {
+  // Tenta extrair CNPJ do emitente
+  const emitCnpjMatch = xmlContent.match(/<emit>[\s\S]*?<CNPJ>(\d{14})<\/CNPJ>[\s\S]*?<\/emit>/);
+  if (emitCnpjMatch) {
+    return emitCnpjMatch[1];
+  }
+  
+  // Fallback: procura qualquer CNPJ dentro de <emit>
+  const emitMatch = xmlContent.match(/<emit>[\s\S]*?<\/emit>/);
+  if (emitMatch) {
+    const cnpjMatch = emitMatch[0].match(/<CNPJ>(\d{14})<\/CNPJ>/);
+    if (cnpjMatch) {
+      return cnpjMatch[1];
+    }
+  }
+  
+  return null;
+}
+
 export async function uploadFile(
   file: Buffer,
   key: string,
@@ -139,7 +158,7 @@ export async function uploadXml(
     };
   }
   
-  const key = `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
   const buffer = typeof xmlContent === 'string' 
     ? Buffer.from(xmlContent, 'utf-8') 
@@ -200,7 +219,7 @@ export async function deleteFile(key: string): Promise<boolean> {
 export async function deleteXml(cnpj: string, chaveAcesso: string): Promise<boolean> {
   const cleanCnpj = sanitizeCnpj(cnpj);
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
   return deleteFile(key);
 }
@@ -282,7 +301,7 @@ export async function getFile(key: string): Promise<Buffer | null> {
 export async function getXml(cnpj: string, chaveAcesso: string): Promise<string | null> {
   const cleanCnpj = sanitizeCnpj(cnpj);
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
   const buffer = await getFile(key);
   if (buffer) {
@@ -312,7 +331,7 @@ export async function getSignedDownloadUrl(key: string, expiresIn: number = 3600
 export async function getXmlUrl(cnpj: string, chaveAcesso: string): Promise<string> {
   const cleanCnpj = sanitizeCnpj(cnpj);
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
   const bucket = getBucket();
   const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
@@ -377,7 +396,7 @@ export async function listFiles(prefix: string): Promise<StorageFile[]> {
 
 export async function listXmlsByCompany(cnpj: string): Promise<StorageFile[]> {
   const cleanCnpj = sanitizeCnpj(cnpj);
-  return listFiles(`${cleanCnpj}/xmls/`);
+  return listFiles(`${cleanCnpj}/xml/`);
 }
 
 export async function listAllByCompany(cnpj: string): Promise<StorageFile[]> {
@@ -405,7 +424,7 @@ export async function fileExists(key: string): Promise<boolean> {
 export async function xmlExists(cnpj: string, chaveAcesso: string): Promise<boolean> {
   const cleanCnpj = sanitizeCnpj(cnpj);
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
   return fileExists(key);
 }
@@ -497,4 +516,5 @@ export default {
   getImageUrl,
   sanitizeCnpj,
   extractChaveAcessoFromXml,
+  extractCnpjEmitenteFromXml,
 };

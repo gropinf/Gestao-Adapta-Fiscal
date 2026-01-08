@@ -33,6 +33,7 @@ import {
   Shield,
   LogOut,
   ChevronDown,
+  HardDrive,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
@@ -70,6 +71,12 @@ const menuItems = [
     title: "Upload Eventos",
     url: "/upload-eventos",
     icon: Upload,
+  },
+  {
+    title: "Contabo Storage",
+    url: "/contabo-storage",
+    icon: HardDrive,
+    adminOnly: true,
   },
   {
     title: "Análise de Sequência",

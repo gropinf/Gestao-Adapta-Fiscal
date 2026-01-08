@@ -7,6 +7,8 @@ import { isAdmin, canAccessCompany, getUserCompanies, isActiveUser } from "./mid
 import { parseXmlContent, validateChave, isValidNFeXml } from "./xmlParser";
 import { parseEventOrInutilizacao, isValidEventXml, detectEventType, type ParsedEventoData, type ParsedInutilizacaoData } from "./xmlEventParser";
 import { saveToValidated, fileExists as storageFileExists } from "./fileStorage";
+import { saveXmlToContabo, saveEventXmlToContabo } from "./xmlStorageService";
+import { readXmlContent, readXmlBuffer } from "./xmlReaderService";
 import { sendEmail, testEmailConnection, getTestEmailTemplate, hasEmailConfig, getXmlEmailTemplate } from "./emailService";
 import { generateXmlsExcel, generateSummaryExcel, generateExcelFilename } from "./excelExport";
 import { fetchCNPJData, cleanCnpj } from "./receitaWS";
@@ -16,6 +18,17 @@ import { testImapConnection } from "./emailTestService";
 import { checkEmailMonitor } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
 import * as contaboStorage from "./contaboStorage";
+import {
+  migrateXmlToContabo,
+  migrateXmlsBatch,
+  getXmlsToMigrate,
+  countXmlsToMigrate,
+  type BatchMigrationResult,
+} from "./xmlMigrationService";
+import {
+  scanContaboForMissingXmls,
+  type ScanResult,
+} from "./contaboScannerService";
 import crypto from "crypto";
 import multer from "multer";
 import * as fs from "fs/promises";
@@ -1212,8 +1225,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "XML not found" });
       }
 
-      // Lê o arquivo XML
-      const xmlContent = await fs.readFile(xml.filepath, "utf-8");
+      // Lê o arquivo XML (do sistema local ou Contabo)
+      const xmlContent = await readXmlContent(xml.filepath);
+      if (!xmlContent) {
+        return res.status(404).json({ error: "XML file not found" });
+      }
 
       // Prepara email com template personalizado
       const subject = `NFe ${xml.chave.substring(0, 8)}... - ${company.razaoSocial}`;
@@ -1663,12 +1679,18 @@ ${company.razaoSocial}
             continue;
           }
 
-          // 6. Save file to storage
-          const savedPath = await saveToValidated(
-            xmlContent, 
-            file.originalname,
-            companyId
-          );
+          // 6. Save event XML to Contabo Storage
+          const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+          if (!saveResult.success) {
+            results.errors.push({
+              filename: file.originalname,
+              error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
+              step: "storage",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+          const savedPath = saveResult.filepath || "";
 
           // 7. Process event
           if (parsedEvent.tipo === "evento") {
@@ -2536,8 +2558,12 @@ ${company.razaoSocial}
       // Adiciona cada XML ao ZIP
       for (const xml of validXmls) {
         try {
-          const xmlContent = await fs.readFile(xml.filepath, "utf-8");
-          archive.append(xmlContent, { name: `NFe${xml.chave}.xml` });
+          const xmlContent = await readXmlContent(xml.filepath);
+          if (xmlContent) {
+            archive.append(xmlContent, { name: `NFe${xml.chave}.xml` });
+          } else {
+            console.error(`Erro ao ler XML ${xml.chave} para ZIP`);
+          }
         } catch (error) {
           console.error(`Erro ao adicionar XML ${xml.chave} ao ZIP:`, error);
         }
@@ -2771,8 +2797,11 @@ ${company.razaoSocial}
         return res.status(404).json({ error: "XML not found" });
       }
 
-      // Read and parse XML content
-      const xmlContent = await fs.readFile(xml.filepath, "utf-8");
+      // Read and parse XML content (do sistema local ou Contabo)
+      const xmlContent = await readXmlContent(xml.filepath);
+      if (!xmlContent) {
+        return res.status(404).json({ error: "XML file not found" });
+      }
       const parsedData = await parseXmlContent(xmlContent);
 
       res.json({
@@ -2878,11 +2907,15 @@ ${company.razaoSocial}
         // Se até 10 XMLs, enviar como anexos individuais
         for (const xml of xmls) {
           try {
-            const xmlBuffer = await fs.readFile(xml.filepath);
-            attachments.push({
-              filename: `NFe${xml.chave}.xml`,
-              content: xmlBuffer,
-            });
+            const xmlBuffer = await readXmlBuffer(xml.filepath);
+            if (xmlBuffer) {
+              attachments.push({
+                filename: `NFe${xml.chave}.xml`,
+                content: xmlBuffer,
+              });
+            } else {
+              console.warn(`Arquivo XML não encontrado: ${xml.filepath}`);
+            }
           } catch (error) {
             console.warn(`Erro ao ler arquivo XML ${xml.chave}:`, error);
           }
@@ -3086,8 +3119,11 @@ ${company.razaoSocial}
         });
       }
 
-      // Ler arquivo XML como buffer binário (não como texto)
-      const xmlBuffer = await fs.readFile(xml.filepath);
+      // Ler arquivo XML como buffer binário (do sistema local ou Contabo)
+      const xmlBuffer = await readXmlBuffer(xml.filepath);
+      if (!xmlBuffer) {
+        return res.status(404).json({ error: "XML file not found" });
+      }
 
       // Enviar email com XML em anexo
       const emailData = {
@@ -3168,8 +3204,11 @@ ${company.razaoSocial}
         return res.status(404).json({ error: "XML not found" });
       }
 
-      // Read XML file from storage
-      const xmlContent = await fs.readFile(xml.filepath, "utf-8");
+      // Read XML file from storage (do sistema local ou Contabo)
+      const xmlContent = await readXmlContent(xml.filepath);
+      if (!xmlContent) {
+        return res.status(404).json({ error: "XML file not found" });
+      }
 
       // Set headers for download
       res.setHeader("Content-Type", "application/xml");
@@ -3321,12 +3360,12 @@ ${company.razaoSocial}
             categoria = "emitida";
           }
 
-          // 10. Salva arquivo no storage usando nosso módulo
-          const saveResult = await saveToValidated(xmlContent, parsedXml.chave);
+          // 10. Salva arquivo no Contabo Storage
+          const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
           if (!saveResult.success) {
             results.errors.push({
               filename: file.originalname,
-              error: saveResult.error || "Erro ao salvar arquivo no storage",
+              error: saveResult.error || "Erro ao salvar arquivo no Contabo Storage",
               step: "storage",
               chave: parsedXml.chave,
             });
@@ -3730,11 +3769,23 @@ ${company.razaoSocial}
 
       // Ler conteúdo do arquivo
       const fileContent = await fs.readFile(file.path);
+      const xmlContent = fileContent.toString('utf-8');
+      
+      // Extrair CNPJ do emitente do XML (prioridade sobre CNPJ da empresa)
+      const cnpjFromXml = contaboStorage.extractCnpjEmitenteFromXml(xmlContent);
+      const cnpjToUse = cnpjFromXml || company.cnpj;
+      
+      if (!cnpjToUse) {
+        await cleanupTempFile();
+        return res.status(400).json({ 
+          error: "Não foi possível identificar o CNPJ do XML nem da empresa" 
+        });
+      }
       
       // Upload para Contabo Storage (extrai chaveAcesso do XML automaticamente)
       const result = await contaboStorage.uploadXmlFromFile(
         fileContent,
-        company.cnpj,
+        cnpjToUse,
         file.originalname
       );
 
@@ -3753,7 +3804,9 @@ ${company.razaoSocial}
         action: "storage_upload_xml",
         details: JSON.stringify({
           companyId,
-          cnpj: company.cnpj,
+          cnpj: cnpjToUse,
+          cnpjFromXml: cnpjFromXml || null,
+          companyCnpj: company.cnpj,
           key: result.key,
           url: result.url,
         }),
@@ -3973,6 +4026,121 @@ ${company.razaoSocial}
     }
   });
 
+  // Migrar XMLs de produção para Contabo Storage
+  app.post("/api/storage/migrate-production", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { limit, batchSize } = req.body;
+      const actualLimit = limit ? parseInt(limit) : undefined;
+      const actualBatchSize = batchSize ? parseInt(batchSize) : 50;
+
+      console.log(`🚀 Iniciando migração de XMLs de produção para Contabo...`);
+
+      // Buscar XMLs de produção (URLs)
+      let xmlsToMigrate = await getXmlsToMigrate(true); // true = incluir URLs
+      
+      if (actualLimit && actualLimit > 0) {
+        xmlsToMigrate = xmlsToMigrate.filter(x => 
+          x.filepath?.startsWith('http://') || x.filepath?.startsWith('https://')
+        ).slice(0, actualLimit);
+      } else {
+        xmlsToMigrate = xmlsToMigrate.filter(x => 
+          x.filepath?.startsWith('http://') || x.filepath?.startsWith('https://')
+        );
+      }
+
+      if (xmlsToMigrate.length === 0) {
+        return res.json({
+          success: true,
+          message: "Nenhum XML de produção encontrado para migrar",
+          total: 0,
+          successCount: 0,
+          errorCount: 0,
+        });
+      }
+
+      // Migrar em batch
+      const result = await migrateXmlsBatch(xmlsToMigrate, {
+        dryRun: false,
+        onProgress: (current, total, migrationResult) => {
+          console.log(`[${current}/${total}] ${migrationResult.chave} - ${migrationResult.success ? 'OK' : migrationResult.error}`);
+        },
+      });
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "storage_migrate_production",
+        details: JSON.stringify({
+          total: result.total,
+          success: result.success,
+          failed: result.failed,
+        }),
+      });
+
+      res.json({
+        success: true,
+        message: `Migração concluída: ${result.success} sucesso, ${result.failed} falhas`,
+        total: result.total,
+        successCount: result.success,
+        errorCount: result.failed,
+        results: result.results,
+      });
+    } catch (error: any) {
+      console.error("Erro ao migrar XMLs de produção:", error);
+      res.status(500).json({ 
+        error: "Erro ao migrar XMLs de produção",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
+  // Escanear Contabo e reimportar XMLs faltantes no banco
+  app.post("/api/storage/scan-and-import", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      console.log(`🔍 Iniciando escaneamento do Contabo Storage...`);
+
+      // Escanear e importar XMLs faltantes
+      const result = await scanContaboForMissingXmls(user.id);
+
+      // Log de auditoria
+      await storage.logAction({
+        userId: user.id,
+        action: "storage_scan_and_import",
+        details: JSON.stringify({
+          totalFiles: result.totalFiles,
+          filesInStorage: result.filesInStorage,
+          filesInDatabase: result.filesInDatabase,
+          missingInDatabase: result.missingInDatabase,
+          processed: result.processed,
+          success: result.success,
+          errors: result.errors,
+        }),
+      });
+
+      res.json({
+        success: true,
+        message: `Escaneamento concluído: ${result.success} XMLs importados, ${result.errors} erros`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("Erro ao escanear Contabo:", error);
+      res.status(500).json({ 
+        error: "Erro ao escanear Contabo Storage",
+        message: error.message || "Erro desconhecido"
+      });
+    }
+  });
+
   // Deletar todos os arquivos de uma empresa
   app.delete("/api/storage/company/:companyId", authMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -4161,6 +4329,167 @@ ${company.razaoSocial}
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+
+  // ============================================
+  // ROTAS DE MIGRAÇÃO DE XMLs PARA CONTABO
+  // ============================================
+
+  // Contar XMLs que precisam ser migrados
+  app.get("/api/storage/migration/count", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const count = await countXmlsToMigrate();
+      res.json({
+        success: true,
+        count,
+        message: `${count} XML(s) precisam ser migrados para o Contabo Storage`,
+      });
+    } catch (error: any) {
+      console.error("Erro ao contar XMLs para migração:", error);
+      res.status(500).json({
+        error: "Erro ao contar XMLs para migração",
+        message: error.message || "Erro desconhecido",
+      });
+    }
+  });
+
+  // Listar XMLs que precisam ser migrados (sem migrar)
+  app.get("/api/storage/migration/list", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const xmls = await getXmlsToMigrate();
+      res.json({
+        success: true,
+        count: xmls.length,
+        xmls: xmls.map(xml => ({
+          id: xml.id,
+          chave: xml.chave,
+          cnpjEmitente: xml.cnpjEmitente,
+          cnpjDestinatario: xml.cnpjDestinatario,
+          filepath: xml.filepath,
+          dataEmissao: xml.dataEmissao,
+        })),
+      });
+    } catch (error: any) {
+      console.error("Erro ao listar XMLs para migração:", error);
+      res.status(500).json({
+        error: "Erro ao listar XMLs para migração",
+        message: error.message || "Erro desconhecido",
+      });
+    }
+  });
+
+  // Executar migração (dry-run ou real)
+  app.post("/api/storage/migration/run", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { dryRun = false, limit } = req.body;
+
+      // Buscar XMLs para migrar
+      let xmlsToMigrate = await getXmlsToMigrate();
+
+      // Limitar quantidade se especificado
+      if (limit && typeof limit === 'number' && limit > 0) {
+        xmlsToMigrate = xmlsToMigrate.slice(0, limit);
+      }
+
+      if (xmlsToMigrate.length === 0) {
+        return res.json({
+          success: true,
+          message: "Nenhum XML precisa ser migrado",
+          result: {
+            total: 0,
+            success: 0,
+            failed: 0,
+            results: [],
+          },
+        });
+      }
+
+      // Executar migração
+      const result = await migrateXmlsBatch(xmlsToMigrate, {
+        dryRun: dryRun === true,
+        onProgress: (current, total, migrationResult) => {
+          console.log(
+            `[Migração] ${current}/${total} - ${migrationResult.chave.substring(0, 12)}... - ${
+              migrationResult.success ? '✅' : '❌'
+            } ${migrationResult.error || ''}`
+          );
+        },
+      });
+
+      res.json({
+        success: true,
+        dryRun,
+        message: dryRun
+          ? `Simulação: ${result.success} sucesso(s), ${result.failed} falha(s) de ${result.total} XML(s)`
+          : `Migração concluída: ${result.success} sucesso(s), ${result.failed} falha(s) de ${result.total} XML(s)`,
+        result,
+      });
+    } catch (error: any) {
+      console.error("Erro ao executar migração:", error);
+      res.status(500).json({
+        error: "Erro ao executar migração",
+        message: error.message || "Erro desconhecido",
+      });
+    }
+  });
+
+  // Migrar um XML específico por ID
+  app.post("/api/storage/migration/xml/:xmlId", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { xmlId } = req.params;
+      const { dryRun = false } = req.body;
+
+      // Buscar XML
+      const xml = await storage.getXml(xmlId);
+      if (!xml) {
+        return res.status(404).json({
+          error: "XML não encontrado",
+        });
+      }
+
+      if (dryRun) {
+        // Modo dry-run: apenas simula
+        const cnpj = xml.cnpjEmitente || xml.cnpjDestinatario;
+        const isLocal = xml.filepath.startsWith('/') || xml.filepath.includes('storage/validated');
+        
+        return res.json({
+          success: true,
+          dryRun: true,
+          message: "Simulação de migração",
+          result: {
+            success: isLocal && !!cnpj,
+            xmlId: xml.id,
+            chave: xml.chave,
+            oldFilepath: xml.filepath,
+            newFilepath: cnpj ? `${cnpj.replace(/\D/g, '')}/xml/${xml.chave}.xml` : undefined,
+            error: !isLocal ? 'Já está no Contabo' : !cnpj ? 'Sem CNPJ' : undefined,
+          },
+        });
+      }
+
+      // Executar migração real
+      const result = await migrateXmlToContabo(xml);
+
+      if (result.success) {
+        res.json({
+          success: true,
+          message: "XML migrado com sucesso",
+          result,
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          message: "Erro ao migrar XML",
+          result,
+        });
+      }
+    } catch (error: any) {
+      console.error("Erro ao migrar XML:", error);
+      res.status(500).json({
+        error: "Erro ao migrar XML",
+        message: error.message || "Erro desconhecido",
+      });
+    }
+  });
 
   // Endpoint de teste do Sentry (público - sem autenticação)
   app.get("/api/test-sentry", async (req, res) => {

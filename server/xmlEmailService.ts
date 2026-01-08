@@ -317,26 +317,41 @@ export async function sendXmlsByEmail(
       throw new Error("Nenhum XML ou evento encontrado para o período informado");
     }
 
-    // 4. Valida que os arquivos XML existem
+    // 4. Valida que os arquivos XML existem e prepara paths
+    // Nota: Para arquivos no Contabo, não podemos usar path.resolve
+    // O serviço de email precisa receber os filepaths diretamente
     const xmlPaths: string[] = [];
     for (const xml of xmls) {
-      const xmlPath = path.resolve(xml.filepath);
-      try {
-        await fs.access(xmlPath);
-        xmlPaths.push(xmlPath);
-      } catch {
-        console.warn(`Arquivo XML não encontrado: ${xmlPath}`);
+      // Se for URL do Contabo, usa diretamente; se for local, resolve o path
+      if (xml.filepath.startsWith('http://') || xml.filepath.startsWith('https://')) {
+        // É URL do Contabo - não precisa verificar acesso, será baixado pelo serviço
+        xmlPaths.push(xml.filepath);
+      } else {
+        // É caminho local - verifica se existe
+        const xmlPath = path.resolve(xml.filepath);
+        try {
+          await fs.access(xmlPath);
+          xmlPaths.push(xmlPath);
+        } catch {
+          console.warn(`Arquivo XML não encontrado: ${xmlPath}`);
+        }
       }
     }
 
     // 5. Adiciona arquivos de eventos
     for (const event of events) {
-      const eventPath = path.resolve(event.filepath);
-      try {
-        await fs.access(eventPath);
-        xmlPaths.push(eventPath);
-      } catch {
-        console.warn(`Arquivo de evento não encontrado: ${eventPath}`);
+      if (event.filepath.startsWith('http://') || event.filepath.startsWith('https://')) {
+        // É URL do Contabo
+        xmlPaths.push(event.filepath);
+      } else {
+        // É caminho local
+        const eventPath = path.resolve(event.filepath);
+        try {
+          await fs.access(eventPath);
+          xmlPaths.push(eventPath);
+        } catch {
+          console.warn(`Arquivo de evento não encontrado: ${eventPath}`);
+        }
       }
     }
 

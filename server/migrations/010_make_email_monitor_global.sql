@@ -18,3 +18,4 @@ ALTER TABLE email_monitors
 COMMENT ON COLUMN email_monitors.company_id IS 'ID da empresa (opcional) - Monitor é funcionalidade global que processa XMLs de todas as empresas';
 
 
+

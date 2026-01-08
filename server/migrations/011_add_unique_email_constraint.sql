@@ -25,3 +25,4 @@ ON email_monitors(LOWER(TRIM(email)));
 COMMENT ON INDEX idx_email_monitors_email_unique IS 'Garante que cada email seja único (case-insensitive)';
 
 
+
