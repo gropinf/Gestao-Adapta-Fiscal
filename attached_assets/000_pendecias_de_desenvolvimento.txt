@@ -1,0 +1,8 @@
+09/01/2026  06:57
+-trocar sentry por signoz (ver meu chatgpt celular de 08/01/2026 +-22hrs);
+-ao cadastrar usuario enviar email para o usuario validar e ir no email os dados do app, etc;
+-analisar se esta importando os xml de inutilização;
+-analisar se esta importando os xml de carta de correção;
+-na verificação de numeração levar em conta inutilização;
+-Testar trocar senha;
+-Testar esqueci minha senha;

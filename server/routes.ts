@@ -800,6 +800,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const companyData = req.body;
 
+      // Sanitizar telefone para garantir que não exceda 20 caracteres
+      if (companyData.telefone && typeof companyData.telefone === 'string') {
+        const telefone = companyData.telefone.trim();
+        companyData.telefone = telefone.length > 20 ? telefone.substring(0, 20) : telefone;
+      }
+
       // Check if CNPJ already exists
       const existing = await storage.getCompanyByCnpj(companyData.cnpj);
       if (existing) {
@@ -832,6 +838,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = req.user!;
       const { id } = req.params;
       const updateData = req.body;
+
+      // Sanitizar telefone para garantir que não exceda 20 caracteres
+      if (updateData.telefone && typeof updateData.telefone === 'string') {
+        const telefone = updateData.telefone.trim();
+        updateData.telefone = telefone.length > 20 ? telefone.substring(0, 20) : telefone;
+      }
 
       // Admin pode atualizar qualquer empresa, outros usuários só suas próprias
       if (user.role !== "admin") {
@@ -1072,6 +1084,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updateData: any = {};
       if (nome !== undefined) updateData.nome = nome;
       if (emailContador !== undefined) updateData.emailContador = emailContador;
+      
+      // Sanitizar telefone para garantir que não exceda 20 caracteres
+      if (req.body.telefone !== undefined) {
+        if (req.body.telefone && typeof req.body.telefone === 'string') {
+          const telefone = req.body.telefone.trim();
+          updateData.telefone = telefone.length > 20 ? telefone.substring(0, 20) : telefone;
+        } else {
+          updateData.telefone = req.body.telefone;
+        }
+      }
 
       const updatedAccountant = await storage.updateAccountant(id, updateData);
 

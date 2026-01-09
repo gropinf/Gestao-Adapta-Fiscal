@@ -28,7 +28,7 @@ export const companies = pgTable("companies", {
   nomeFantasia: text("nome_fantasia"),
   inscricaoEstadual: text("inscricao_estadual"),
   crt: varchar("crt", { length: 1 }), // CRT - Código de Regime Tributário (1=Simples Nacional, 2=Simples excesso, 3=Normal, 4=MEI)
-  telefone: varchar("telefone", { length: 15 }), // Telefone de contato
+  telefone: varchar("telefone", { length: 20 }), // Telefone de contato
   email: text("email"), // Email de contato
   // Status
   ativo: boolean("ativo").default(true).notNull(), // Empresa ativa
@@ -66,7 +66,7 @@ export const accountants = pgTable("accountants", {
   inscricaoEstadual: text("inscricao_estadual"), // IE
   crt: varchar("crt", { length: 1 }), // CRT
   emailContador: text("email_contador").notNull(), // Email principal do contador
-  telefone: varchar("telefone", { length: 15 }), // Telefone de contato
+  telefone: varchar("telefone", { length: 20 }), // Telefone de contato
   // Endereço completo
   rua: text("rua"),
   numero: text("numero"),

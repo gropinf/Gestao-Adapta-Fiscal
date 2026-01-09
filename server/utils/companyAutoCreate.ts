@@ -15,6 +15,16 @@ function formatCNPJ(cnpj: string): string {
 }
 
 /**
+ * Sanitiza telefone para garantir que não exceda 20 caracteres
+ */
+function sanitizeTelefone(telefone: string | null | undefined): string | undefined {
+  if (!telefone) return undefined;
+  // Remove espaços extras e limita a 20 caracteres
+  const cleaned = telefone.trim();
+  return cleaned.length > 20 ? cleaned.substring(0, 20) : cleaned;
+}
+
+/**
  * Cria empresa automaticamente a partir dos dados do XML
  * Empresa é criada com status "Aguardando Liberação"
  * Admin é notificado por email
@@ -32,7 +42,7 @@ export async function createCompanyFromXml(xmlData: ParsedXmlData, userId?: stri
       nomeFantasia: xmlData.razaoSocialEmitente || undefined,
       inscricaoEstadual: xmlData.inscricaoEstadualEmitente || undefined,
       crt: xmlData.crtEmitente || undefined,
-      telefone: xmlData.telefoneEmitente || undefined,
+      telefone: sanitizeTelefone(xmlData.telefoneEmitente),
       email: xmlData.emailEmitente || undefined,
       // Status: 1 = Aguardando Liberação
       status: 1,
