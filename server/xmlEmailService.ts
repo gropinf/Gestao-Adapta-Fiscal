@@ -1,8 +1,10 @@
 import archiver from "archiver";
 import * as fs from "fs/promises";
+import { createWriteStream } from "fs";
 import * as path from "path";
-import { sendEmail } from "./emailService";
+import { sendEmailWithFallback } from "./emailService";
 import { storage } from "./storage";
+import { isContaboUrl, readXmlBuffer } from "./xmlReaderService";
 import type { Company } from "../shared/schema";
 
 /**
@@ -67,15 +69,58 @@ function generateZipFilename(company: Company, periodStart: string, periodEnd: s
   return `xml_${cnpj}_${dtInicio}_${dtFim}_${razaoSocial}.zip`;
 }
 
+function generateZipFilenameWithSuffix(
+  company: Company,
+  periodStart: string,
+  periodEnd: string,
+  suffix: string
+): string {
+  const base = generateZipFilename(company, periodStart, periodEnd).replace(".zip", "");
+  return `${base}_${suffix}.zip`;
+}
+
 /**
  * Cria arquivo ZIP com os XMLs
  */
+type ZipEntry = {
+  name: string;
+  path?: string;
+  buffer?: Buffer;
+};
+
+async function buildZipEntries(filepaths: string[]): Promise<ZipEntry[]> {
+  const entries: ZipEntry[] = [];
+
+  for (const filepath of filepaths) {
+    if (isContaboUrl(filepath)) {
+      const buffer = await readXmlBuffer(filepath);
+      if (!buffer) {
+        console.warn(`Arquivo XML não encontrado no Contabo: ${filepath}`);
+        continue;
+      }
+      const name = path.basename(new URL(filepath).pathname);
+      entries.push({ name, buffer });
+      continue;
+    }
+
+    const resolved = path.resolve(filepath);
+    try {
+      await fs.access(resolved);
+      entries.push({ name: path.basename(resolved), path: resolved });
+    } catch {
+      console.warn(`Arquivo XML não encontrado: ${resolved}`);
+    }
+  }
+
+  return entries;
+}
+
 async function createZipFile(
-  xmlPaths: string[],
+  entries: ZipEntry[],
   outputPath: string
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const output = require("fs").createWriteStream(outputPath);
+    const output = createWriteStream(outputPath);
     const archive = archiver("zip", {
       zlib: { level: 9 } // Máxima compressão
     });
@@ -91,10 +136,13 @@ async function createZipFile(
 
     archive.pipe(output);
 
-    // Adiciona cada XML ao arquivo
-    for (const xmlPath of xmlPaths) {
-      const filename = path.basename(xmlPath);
-      archive.file(xmlPath, { name: filename });
+    // Adiciona cada arquivo ao ZIP
+    for (const entry of entries) {
+      if (entry.buffer) {
+        archive.append(entry.buffer, { name: entry.name });
+      } else if (entry.path) {
+        archive.file(entry.path, { name: entry.name });
+      }
     }
 
     archive.finalize();
@@ -110,7 +158,10 @@ function generateEmailTemplate(
   periodEnd: string,
   xmlCount: number,
   eventCount: number,
-  zipFilename: string
+  inutCount: number,
+  otherEventCount: number,
+  xmlZipFilename: string,
+  eventZipFilename?: string | null
 ): string {
   const cnpjFormatado = formatCnpj(company.cnpj);
   const dtInicio = formatDate(periodStart);
@@ -257,19 +308,38 @@ function generateEmailTemplate(
           <span class="info-label">Total de XMLs:</span>
           <span class="info-value highlight">${xmlCount} arquivo${xmlCount !== 1 ? 's' : ''}</span>
         </div>
-        ${eventCount > 0 ? `
+        ${(inutCount > 0 || otherEventCount > 0) ? `
         <div class="info-row">
           <span class="info-label">Eventos (Cancelamentos/Correções):</span>
-          <span class="info-value highlight">${eventCount} arquivo${eventCount !== 1 ? 's' : ''}</span>
+          <span class="info-value highlight">${otherEventCount} arquivo${otherEventCount !== 1 ? 's' : ''}</span>
         </div>
+        ${inutCount > 0 ? `
+        <div class="info-row">
+          <span class="info-label">Inutilizações por intervalo:</span>
+          <span class="info-value highlight">${inutCount} arquivo${inutCount !== 1 ? 's' : ''}</span>
+        </div>
+        ` : ''}
+        ${otherEventCount > 0 ? `
+        <div class="info-row">
+          <span class="info-label">Outros eventos por data:</span>
+          <span class="info-value highlight">${otherEventCount} arquivo${otherEventCount !== 1 ? 's' : ''}</span>
+        </div>
+        ` : ''}
         ` : ''}
       </div>
       
       <div class="file-box">
         <div class="file-icon">📦</div>
-        <div class="file-name">${zipFilename}</div>
-        <p style="margin-top: 10px; color: #6b7280;">Arquivo em anexo</p>
+        <div class="file-name">${xmlZipFilename}</div>
+        <p style="margin-top: 10px; color: #6b7280;">XMLs das notas fiscais (ZIP)</p>
       </div>
+      ${eventZipFilename ? `
+      <div class="file-box">
+        <div class="file-icon">🗂️</div>
+        <div class="file-name">${eventZipFilename}</div>
+        <p style="margin-top: 10px; color: #6b7280;">Eventos fiscais (ZIP)</p>
+      </div>
+      ` : ''}
       
       <p style="margin-top: 20px;">
         <strong>Observações:</strong>
@@ -309,62 +379,91 @@ export async function sendXmlsByEmail(
 
     // 2. Busca XMLs do período
     const xmls = await storage.getXmlsByPeriod(companyId, periodStart, periodEnd);
-    
-    // 3. Busca eventos do período (cancelamentos, cartas de correção, inutilizações)
-    const events = await storage.getXmlEventsByPeriod(companyId, periodStart, periodEnd);
+
+    // 3. Busca eventos (filtrando por regras de período/numeração)
+    const allEvents = await storage.getXmlEventsByCompany(companyId);
+    const isWithinPeriod = (dateStr?: string | null) =>
+      !!dateStr && dateStr >= periodStart && dateStr <= periodEnd;
+
+    const allowedModels = new Set(
+      xmls
+        .map((xml) => (xml.tipoDoc === "NFe" ? "55" : xml.tipoDoc === "NFCe" ? "65" : null))
+        .filter((model): model is string => !!model)
+    );
+    const matchesModel = (model?: string | null) =>
+      allowedModels.size === 0 || !model || allowedModels.has(model);
+
+    const numeros = xmls
+      .map((xml) => Number.parseInt(xml.numeroNota || "", 10))
+      .filter((numero) => Number.isFinite(numero) && numero > 0);
+    const numeroMin = numeros.length > 0 ? Math.min(...numeros) : null;
+    const numeroMax = numeros.length > 0 ? Math.max(...numeros) : null;
+
+    const inutEvents = allEvents.filter((event) => {
+      if (event.tipoEvento !== "inutilizacao") return false;
+      if (!matchesModel(event.modelo)) return false;
+
+      const inicio = Number.parseInt(event.numeroInicial || "", 10);
+      const fim = Number.parseInt(event.numeroFinal || "", 10);
+      if (!Number.isFinite(inicio) || !Number.isFinite(fim)) return false;
+
+      if (numeroMin === null || numeroMax === null) {
+        return isWithinPeriod(event.dataEvento);
+      }
+
+      return fim >= numeroMin && inicio <= numeroMax;
+    });
+
+    const otherEvents = allEvents.filter((event) => {
+      if (event.tipoEvento === "inutilizacao") return false;
+      if (!matchesModel(event.modelo)) return false;
+      return isWithinPeriod(event.dataEvento);
+    });
+
+    const events = [...otherEvents, ...inutEvents];
     
     if (xmls.length === 0 && events.length === 0) {
       throw new Error("Nenhum XML ou evento encontrado para o período informado");
     }
 
-    // 4. Valida que os arquivos XML existem e prepara paths
-    // Nota: Para arquivos no Contabo, não podemos usar path.resolve
-    // O serviço de email precisa receber os filepaths diretamente
-    const xmlPaths: string[] = [];
-    for (const xml of xmls) {
-      // Se for URL do Contabo, usa diretamente; se for local, resolve o path
-      if (xml.filepath.startsWith('http://') || xml.filepath.startsWith('https://')) {
-        // É URL do Contabo - não precisa verificar acesso, será baixado pelo serviço
-        xmlPaths.push(xml.filepath);
-      } else {
-        // É caminho local - verifica se existe
-        const xmlPath = path.resolve(xml.filepath);
-        try {
-          await fs.access(xmlPath);
-          xmlPaths.push(xmlPath);
-        } catch {
-          console.warn(`Arquivo XML não encontrado: ${xmlPath}`);
-        }
-      }
-    }
+    // 4. Prepara lista de paths para XMLs e eventos
+    const xmlPaths = xmls.map((xml) => xml.filepath);
 
     // 5. Adiciona arquivos de eventos
-    for (const event of events) {
-      if (event.filepath.startsWith('http://') || event.filepath.startsWith('https://')) {
-        // É URL do Contabo
-        xmlPaths.push(event.filepath);
-      } else {
-        // É caminho local
-        const eventPath = path.resolve(event.filepath);
-        try {
-          await fs.access(eventPath);
-          xmlPaths.push(eventPath);
-        } catch {
-          console.warn(`Arquivo de evento não encontrado: ${eventPath}`);
-        }
-      }
+    const eventPaths = events.map((event) => event.filepath);
+
+    if (xmlPaths.length === 0 && eventPaths.length === 0) {
+      throw new Error("Nenhum arquivo XML encontrado para o período informado");
     }
 
-    if (xmlPaths.length === 0) {
+    // 4. Gera nomes dos arquivos ZIP
+    const xmlZipFilename = generateZipFilenameWithSuffix(company, periodStart, periodEnd, "notas");
+    const xmlZipPath = path.join("/tmp", xmlZipFilename);
+    const eventZipFilename = eventPaths.length > 0
+      ? generateZipFilenameWithSuffix(company, periodStart, periodEnd, "eventos")
+      : null;
+    const eventZipPath = eventZipFilename ? path.join("/tmp", eventZipFilename) : null;
+
+    // 5. Cria arquivos ZIP
+    const xmlEntries = await buildZipEntries(xmlPaths);
+    const eventEntries = await buildZipEntries(eventPaths);
+
+    console.log(
+      `[XML Email] Arquivos prontos: ${xmlEntries.length} notas, ${eventEntries.length} eventos`
+    );
+
+    if (xmlEntries.length === 0 && eventEntries.length === 0) {
       throw new Error("Nenhum arquivo XML válido encontrado no servidor");
     }
 
-    // 4. Gera nome do arquivo ZIP
-    const zipFilename = generateZipFilename(company, periodStart, periodEnd);
-    const zipPath = path.join("/tmp", zipFilename);
-
-    // 5. Cria arquivo ZIP
-    await createZipFile(xmlPaths, zipPath);
+    if (xmlEntries.length > 0) {
+      await createZipFile(xmlEntries, xmlZipPath);
+      console.log(`[XML Email] ZIP de notas criado: ${xmlZipFilename}`);
+    }
+    if (eventZipPath && eventEntries.length > 0) {
+      await createZipFile(eventEntries, eventZipPath);
+      console.log(`[XML Email] ZIP de eventos criado: ${eventZipFilename}`);
+    }
 
     // 6. Gera assunto e corpo do email
     const emailSubject = `${formatCnpj(company.cnpj)} - ${company.razaoSocial}`;
@@ -374,33 +473,55 @@ export async function sendXmlsByEmail(
       periodEnd,
       xmls.length,
       events.length,
-      zipFilename
+      inutEvents.length,
+      otherEvents.length,
+      xmlZipFilename,
+      eventZipFilename
     );
 
     // 7. Envia o email
-    await sendEmail({
+    const attachments = [];
+    if (xmlEntries.length > 0) {
+      attachments.push({
+        filename: xmlZipFilename,
+        path: xmlZipPath,
+      });
+    }
+    if (eventZipPath && eventZipFilename && eventEntries.length > 0) {
+      attachments.push({
+        filename: eventZipFilename,
+        path: eventZipPath,
+      });
+    }
+
+    const globalEmailSettings = await storage.getEmailGlobalSettings();
+    const sendResult = await sendEmailWithFallback(company, {
       to: destinationEmail,
       subject: emailSubject,
       html: emailBody,
-      attachments: [
-        {
-          filename: zipFilename,
-          path: zipPath,
-        },
-      ],
-    });
+      attachments,
+    }, globalEmailSettings);
+    if (!sendResult.success) {
+      throw new Error(sendResult.error || "Erro ao enviar email");
+    }
+    console.log(`[XML Email] Email enviado para ${destinationEmail} (id: ${sendResult.messageId || "n/a"})`);
 
-    // 8. Remove arquivo ZIP temporário
+    // 8. Remove arquivos ZIP temporários
     try {
-      await fs.unlink(zipPath);
+      if (xmlEntries.length > 0) {
+        await fs.unlink(xmlZipPath);
+      }
+      if (eventZipPath && eventEntries.length > 0) {
+        await fs.unlink(eventZipPath);
+      }
     } catch (err) {
       console.warn("Erro ao remover arquivo ZIP temporário:", err);
     }
 
     return {
       success: true,
-      zipFilename,
-      xmlCount: xmlPaths.length,
+      zipFilename: xmlZipFilename,
+      xmlCount: xmls.length,
       emailSubject,
     };
   } catch (error: any) {

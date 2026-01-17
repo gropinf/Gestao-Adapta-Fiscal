@@ -73,12 +73,6 @@ const menuItems = [
     icon: Upload,
   },
   {
-    title: "Contabo Storage",
-    url: "/contabo-storage",
-    icon: HardDrive,
-    adminOnly: true,
-  },
-  {
     title: "Análise de Sequência",
     url: "/analise-sequencia",
     icon: BarChart3,
@@ -93,6 +87,12 @@ const menuItems = [
     url: "/configuracoes/email-monitor",
     icon: Mail,
     adminOnly: true, // Apenas para admin - funcionalidade global
+  },
+  {
+    title: "Email Global",
+    url: "/configuracoes/email-global",
+    icon: Mail,
+    adminOnly: true,
   },
   {
     title: "Logs de Verificação",
@@ -172,7 +172,7 @@ interface DashboardLayoutProps {
 }
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user, currentCompanyId, setCurrentCompany, logout, accessLogId, setAccessLogId } = useAuthStore();
   const hasCalledSelectCompany = useRef(false);
 
@@ -182,33 +182,42 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     enabled: !!user,
   });
 
-  // Set first company as current if none selected
+  // Decide seleção inicial ou redireciona para seleção manual
   useEffect(() => {
-    if (companies && companies.length > 0 && !currentCompanyId) {
-      const firstCompanyId = companies[0].id;
-      setCurrentCompany(firstCompanyId);
-      
-      // Chamar API para registrar seleção inicial da empresa (atualiza accessLog)
-      if (accessLogId && !hasCalledSelectCompany.current) {
-        hasCalledSelectCompany.current = true;
-        fetch("/api/auth/select-company", {
-          method: "POST",
-          headers: {
-            ...getAuthHeader(),
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ companyId: firstCompanyId, accessLogId }),
-        })
-          .then(() => {
-            console.log("Empresa inicial selecionada e registrada no log");
-            setAccessLogId(null); // Limpar accessLogId após uso
-          })
-          .catch((error) => {
-            console.error("Erro ao registrar seleção de empresa:", error);
-          });
-      }
+    if (!companies || companies.length === 0) return;
+    if (currentCompanyId) return;
+
+    if (companies.length === 1) {
+      setCurrentCompany(companies[0].id);
+      return;
     }
-  }, [companies, currentCompanyId, setCurrentCompany, accessLogId, setAccessLogId]);
+
+    if (location !== "/selecionar-empresa") {
+      setLocation("/selecionar-empresa");
+    }
+  }, [companies, currentCompanyId, setCurrentCompany, location, setLocation]);
+
+  // Registrar seleção inicial da empresa (atualiza accessLog)
+  useEffect(() => {
+    if (!currentCompanyId || !accessLogId || hasCalledSelectCompany.current) return;
+    hasCalledSelectCompany.current = true;
+
+    fetch("/api/auth/select-company", {
+      method: "POST",
+      headers: {
+        ...getAuthHeader(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ companyId: currentCompanyId, accessLogId }),
+    })
+      .then(() => {
+        console.log("Empresa inicial selecionada e registrada no log");
+        setAccessLogId(null);
+      })
+      .catch((error) => {
+        console.error("Erro ao registrar seleção de empresa:", error);
+      });
+  }, [currentCompanyId, accessLogId, setAccessLogId]);
 
   const currentCompany = companies?.find((c) => c.id === currentCompanyId) || companies?.[0];
 

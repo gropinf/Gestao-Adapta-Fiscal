@@ -1,8 +1,24 @@
 09/01/2026  06:57
 -trocar sentry por signoz (ver meu chatgpt celular de 08/01/2026 +-22hrs);
--ao cadastrar usuario enviar email para o usuario validar e ir no email os dados do app, etc;
 -analisar se esta importando os xml de inutilização;
 -analisar se esta importando os xml de carta de correção;
 -na verificação de numeração levar em conta inutilização;
 -Testar trocar senha;
 -Testar esqueci minha senha;
+-criar uma pagina que sera enviado ao cliente, o cliente tera q digitar o cnpj:
+   1) caso ja existe o cadastro o sistema informa que ja eh cadastrado, mostra as informações e os email ja atrelados
+   2) caso nao exista pesquisa o cnpj traz as informações e informa que nao existe e pede confirmar a inclusao;
+   3) apos 1 ou 2, coloca a opção de poder cadastrar email para atrelar a essa empresa, obrigatorio pelo menos 1 email;
+   4) caso email nao exista enviar link por email para ele poder ativar e cadastrar a senha;
+   5) caso email ja exista enviar link somente com as informações; 
+   6) no email deve ir tb as informações da empresa;
+
+-ao cadastrar usuario enviar email para o usuario validar e ir no email os dados do app
+    
+16/01/2026
+-analisar por exemplo empresa familia cnpj 37063686000170 selecionei o dia 18/12/25
+no olhinho mostrou as informações do xml (disse inclusive carregando), porem no botão baixar diz nao achar o arquivo
+estranho pois se leu eh pq gravou
+ok-outro detalhe eh q adiciono as informações para pesquisar, e dai eu clico no olhinho para ver as inf da nota blz, porem quando volto, a pesquisa foi zerada
+ok-criar seletor igual caixa facil
+-criar botão ao lado do combo de empresa para chamar o seletor pois no combo qdo muitas empresas fica ruim de escolher

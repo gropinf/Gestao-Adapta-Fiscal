@@ -9,6 +9,7 @@ import {
   actions,
   alerts,
   emailMonitors,
+  emailGlobalSettings,
   accessRequests,
   userAccessLogs,
   xmlEmailHistory,
@@ -30,6 +31,8 @@ import {
   type InsertAlert,
   type EmailMonitor,
   type InsertEmailMonitor,
+  type EmailGlobalSettings,
+  type InsertEmailGlobalSettings,
   type AccessRequest,
   type InsertAccessRequest,
   type UserAccessLog,
@@ -40,7 +43,7 @@ import {
   type InsertEmailCheckLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, like, or, gte, lte, sql } from "drizzle-orm";
+import { eq, and, desc, like, or, gte, lte, sql, isNull } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -87,6 +90,7 @@ export interface IStorage {
   getXmlsByCnpj(cnpj: string, filters?: XmlFilters): Promise<Xml[]>;
   createXml(xml: InsertXml): Promise<Xml>;
   updateXml(id: string, xml: Partial<InsertXml>): Promise<Xml | undefined>;
+  softDeleteXml(id: string, deletedAt?: Date): Promise<Xml | undefined>;
   deleteXml(id: string): Promise<void>;
   
   // XML Events
@@ -95,6 +99,25 @@ export interface IStorage {
   getXmlEventsByXmlId(xmlId: string): Promise<XmlEvent[]>;
   getXmlEventsByCompany(companyId: string): Promise<XmlEvent[]>;
   getXmlEventsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<XmlEvent[]>;
+  getDuplicateXmlEventForEvento(input: {
+    companyId: string;
+    chaveNFe: string;
+    tipoEvento: string;
+    numeroSequencia?: number | null;
+    protocolo?: string | null;
+    dataEvento?: string | null;
+    horaEvento?: string | null;
+  }): Promise<XmlEvent | undefined>;
+  getDuplicateXmlEventForInutilizacao(input: {
+    companyId: string;
+    modelo: string;
+    serie: string;
+    numeroInicial: string;
+    numeroFinal: string;
+    protocolo?: string | null;
+    dataEvento?: string | null;
+    horaEvento?: string | null;
+  }): Promise<XmlEvent | undefined>;
   deleteXmlEvent(id: string): Promise<void>;
   
   // Actions (Audit)
@@ -118,6 +141,10 @@ export interface IStorage {
   updateEmailMonitor(id: string, monitor: Partial<InsertEmailMonitor>): Promise<EmailMonitor | undefined>;
   deleteEmailMonitor(id: string): Promise<void>;
   updateEmailMonitorLastCheck(id: string): Promise<void>;
+
+  // Email Global Settings
+  getEmailGlobalSettings(): Promise<EmailGlobalSettings | undefined>;
+  upsertEmailGlobalSettings(settings: InsertEmailGlobalSettings): Promise<EmailGlobalSettings>;
   
   // Access Requests
   createAccessRequest(request: InsertAccessRequest): Promise<AccessRequest>;
@@ -421,12 +448,18 @@ export class DatabaseStorage implements IStorage {
 
   // XMLs
   async getXml(id: string): Promise<Xml | undefined> {
-    const [xml] = await db.select().from(xmls).where(eq(xmls.id, id));
+    const [xml] = await db
+      .select()
+      .from(xmls)
+      .where(and(eq(xmls.id, id), isNull(xmls.deletedAt)));
     return xml || undefined;
   }
 
   async getXmlByChave(chave: string): Promise<Xml | undefined> {
-    const [xml] = await db.select().from(xmls).where(eq(xmls.chave, chave));
+    const [xml] = await db
+      .select()
+      .from(xmls)
+      .where(and(eq(xmls.chave, chave), isNull(xmls.deletedAt)));
     return xml || undefined;
   }
 
@@ -442,7 +475,8 @@ export class DatabaseStorage implements IStorage {
       or(
         eq(xmls.cnpjEmitente, company.cnpj),
         eq(xmls.cnpjDestinatario, company.cnpj)
-      )
+      ),
+      isNull(xmls.deletedAt),
     ];
 
     if (filters?.tipoDoc) {
@@ -490,7 +524,7 @@ export class DatabaseStorage implements IStorage {
     );
 
     // Aplicar filtros adicionais
-    const conditions = [whereCondition];
+    const conditions = [whereCondition, isNull(xmls.deletedAt)];
 
     if (filters?.tipoDoc) {
       conditions.push(eq(xmls.tipoDoc, filters.tipoDoc));
@@ -538,6 +572,15 @@ export class DatabaseStorage implements IStorage {
     const [xml] = await db
       .update(xmls)
       .set(updateData)
+      .where(eq(xmls.id, id))
+      .returning();
+    return xml || undefined;
+  }
+
+  async softDeleteXml(id: string, deletedAt: Date = new Date()): Promise<Xml | undefined> {
+    const [xml] = await db
+      .update(xmls)
+      .set({ deletedAt })
       .where(eq(xmls.id, id))
       .returning();
     return xml || undefined;
@@ -677,6 +720,27 @@ export class DatabaseStorage implements IStorage {
       .update(emailMonitors)
       .set({ lastCheckedAt: new Date() })
       .where(eq(emailMonitors.id, id));
+  }
+
+  async getEmailGlobalSettings(): Promise<EmailGlobalSettings | undefined> {
+    const [settings] = await db.select().from(emailGlobalSettings).limit(1);
+    return settings || undefined;
+  }
+
+  async upsertEmailGlobalSettings(settings: InsertEmailGlobalSettings): Promise<EmailGlobalSettings> {
+    const [existing] = await db.select().from(emailGlobalSettings).limit(1);
+
+    if (existing) {
+      const [updated] = await db
+        .update(emailGlobalSettings)
+        .set({ ...settings, updatedAt: new Date() })
+        .where(eq(emailGlobalSettings.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(emailGlobalSettings).values(settings).returning();
+    return created;
   }
 
   // Access Requests
@@ -852,6 +916,7 @@ export class DatabaseStorage implements IStorage {
             eq(xmls.cnpjEmitente, company.cnpj),
             eq(xmls.cnpjDestinatario, company.cnpj)
           ),
+          isNull(xmls.deletedAt),
           gte(xmls.dataEmissao, periodStart),
           lte(xmls.dataEmissao, periodEnd)
         )
@@ -911,6 +976,72 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(xmlEvents.dataEvento));
+  }
+
+  async getDuplicateXmlEventForEvento(input: {
+    companyId: string;
+    chaveNFe: string;
+    tipoEvento: string;
+    numeroSequencia?: number | null;
+    protocolo?: string | null;
+    dataEvento?: string | null;
+    horaEvento?: string | null;
+  }): Promise<XmlEvent | undefined> {
+    const baseConditions = [
+      eq(xmlEvents.companyId, input.companyId),
+      eq(xmlEvents.chaveNFe, input.chaveNFe),
+      eq(xmlEvents.tipoEvento, input.tipoEvento),
+    ];
+
+    if (typeof input.numeroSequencia === "number") {
+      baseConditions.push(eq(xmlEvents.numeroSequencia, input.numeroSequencia));
+    }
+
+    if (input.protocolo) {
+      baseConditions.push(eq(xmlEvents.protocolo, input.protocolo));
+    } else if (input.dataEvento && input.horaEvento) {
+      baseConditions.push(eq(xmlEvents.dataEvento, input.dataEvento));
+      baseConditions.push(eq(xmlEvents.horaEvento, input.horaEvento));
+    }
+
+    const [event] = await db
+      .select()
+      .from(xmlEvents)
+      .where(and(...baseConditions));
+    return event || undefined;
+  }
+
+  async getDuplicateXmlEventForInutilizacao(input: {
+    companyId: string;
+    modelo: string;
+    serie: string;
+    numeroInicial: string;
+    numeroFinal: string;
+    protocolo?: string | null;
+    dataEvento?: string | null;
+    horaEvento?: string | null;
+  }): Promise<XmlEvent | undefined> {
+    const baseConditions = [
+      eq(xmlEvents.companyId, input.companyId),
+      eq(xmlEvents.tipoEvento, "inutilizacao"),
+      eq(xmlEvents.modelo, input.modelo),
+      eq(xmlEvents.serie, input.serie),
+      eq(xmlEvents.numeroInicial, input.numeroInicial),
+      eq(xmlEvents.numeroFinal, input.numeroFinal),
+    ];
+
+    if (input.protocolo) {
+      baseConditions.push(eq(xmlEvents.protocolo, input.protocolo));
+    } else if (input.dataEvento && input.horaEvento) {
+      baseConditions.push(eq(xmlEvents.dataEvento, input.dataEvento));
+      baseConditions.push(eq(xmlEvents.horaEvento, input.horaEvento));
+    }
+
+    const [event] = await db
+      .select()
+      .from(xmlEvents)
+      .where(and(...baseConditions));
+    return event || undefined;
   }
 
   async deleteXmlEvent(id: string): Promise<void> {

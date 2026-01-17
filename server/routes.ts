@@ -3,13 +3,13 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { authMiddleware, hashPassword, comparePassword, generateToken, type AuthRequest } from "./auth";
 import { logger } from "./logger";
-import { isAdmin, canAccessCompany, getUserCompanies, isActiveUser } from "./middleware/authorization";
+import { isAdmin, canAccessCompany, isActiveUser } from "./middleware/authorization";
 import { parseXmlContent, validateChave, isValidNFeXml } from "./xmlParser";
 import { parseEventOrInutilizacao, isValidEventXml, detectEventType, type ParsedEventoData, type ParsedInutilizacaoData } from "./xmlEventParser";
 import { saveToValidated, fileExists as storageFileExists } from "./fileStorage";
 import { saveXmlToContabo, saveEventXmlToContabo } from "./xmlStorageService";
 import { readXmlContent, readXmlBuffer } from "./xmlReaderService";
-import { sendEmail, testEmailConnection, getTestEmailTemplate, hasEmailConfig, getXmlEmailTemplate } from "./emailService";
+import { sendEmail, sendEmailWithFallback, sendGlobalEmail, sendPublicEmail, testEmailConnection, testGlobalEmailConnection, getTestEmailTemplate, hasEmailConfig, getXmlEmailTemplate, hasGlobalEmailConfig } from "./emailService";
 import { generateXmlsExcel, generateSummaryExcel, generateExcelFilename } from "./excelExport";
 import { fetchCNPJData, cleanCnpj } from "./receitaWS";
 import { getOrCreateCompanyByCnpj } from "./utils/companyAutoCreate";
@@ -35,25 +35,369 @@ import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import archiver from "archiver";
+import unzipper from "unzipper";
+import { createExtractorFromData } from "node-unrar-js";
+import { createRequire } from "module";
+import { pipeline } from "stream/promises";
+
+const MAX_UPLOAD_FILE_MB = parseInt(process.env.UPLOAD_MAX_FILE_MB || "200", 10);
+const MAX_EXTRACTED_FILES = parseInt(process.env.UPLOAD_MAX_EXTRACTED_FILES || "20000", 10);
+const MAX_EXTRACTED_BYTES =
+  parseInt(process.env.UPLOAD_MAX_EXTRACTED_MB || "200", 10) * 1024 * 1024;
+const require = createRequire(import.meta.url);
+let cachedUnrarWasmBinary: Buffer | null = null;
+
+type UploadProgressInfo = {
+  total: number;
+  processed: number;
+  errors: number;
+  done: boolean;
+  startedAt: number;
+};
+
+const uploadProgressMap = new Map<string, UploadProgressInfo>();
+
+function initUploadProgress(uploadId: string, total: number, initialErrors = 0) {
+  uploadProgressMap.set(uploadId, {
+    total,
+    processed: initialErrors,
+    errors: initialErrors,
+    done: false,
+    startedAt: Date.now(),
+  });
+}
+
+function bumpUploadProgress(uploadId: string, hadError: boolean) {
+  const progress = uploadProgressMap.get(uploadId);
+  if (!progress) return;
+  progress.processed += 1;
+  if (hadError) {
+    progress.errors += 1;
+  }
+}
+
+function completeUploadProgress(uploadId: string) {
+  const progress = uploadProgressMap.get(uploadId);
+  if (!progress) return;
+  progress.done = true;
+  setTimeout(() => uploadProgressMap.delete(uploadId), 10 * 60 * 1000);
+}
+
+async function getUnrarWasmBinary(): Promise<Buffer | null> {
+  if (cachedUnrarWasmBinary) {
+    return cachedUnrarWasmBinary;
+  }
+
+  try {
+    const wasmPath = require.resolve("node-unrar-js/esm/js/unrar.wasm");
+    cachedUnrarWasmBinary = await fs.readFile(wasmPath);
+    return cachedUnrarWasmBinary;
+  } catch (error) {
+    console.warn("Não foi possível carregar o unrar.wasm:", error);
+    return null;
+  }
+}
 
 // Configure multer for file uploads
 const upload = multer({
   dest: "/tmp/uploads",
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: MAX_UPLOAD_FILE_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === "text/xml" || file.mimetype === "application/xml" || file.originalname.endsWith(".xml")) {
+    const name = file.originalname.toLowerCase();
+    const isXml = file.mimetype === "text/xml" || file.mimetype === "application/xml" || name.endsWith(".xml");
+    const isZip = file.mimetype === "application/zip" || file.mimetype === "application/x-zip-compressed" || name.endsWith(".zip");
+    const isRar = file.mimetype === "application/x-rar-compressed" || file.mimetype === "application/vnd.rar" || name.endsWith(".rar");
+
+    if (isXml || isZip || isRar) {
       cb(null, true);
     } else {
-      cb(new Error("Only XML files are allowed"));
+      cb(new Error("Only XML, ZIP or RAR files are allowed"));
     }
   },
 });
 
+function isXmlFilename(name: string): boolean {
+  return name.toLowerCase().endsWith(".xml");
+}
+
+function isZipFilename(name: string): boolean {
+  return name.toLowerCase().endsWith(".zip");
+}
+
+function isRarFilename(name: string): boolean {
+  return name.toLowerCase().endsWith(".rar");
+}
+
+function normalizeXmlArchiveName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith("-procnfe.xml")) {
+    return lower.replace(/-procnfe\.xml$/, "");
+  }
+  if (lower.endsWith("-nfe.xml")) {
+    return lower.replace(/-nfe\.xml$/, "");
+  }
+  return lower.replace(/\.xml$/, "");
+}
+
+type UploadItem = {
+  path: string;
+  originalname: string;
+};
+
+type ExpandResult = {
+  items: UploadItem[];
+  errors: Array<{ filename: string; error: string; step: string }>;
+  cleanupPaths: string[];
+  totalFiles: number;
+};
+
+async function extractZipXmls(file: Express.Multer.File): Promise<ExpandResult> {
+  const items: UploadItem[] = [];
+  const errors: Array<{ filename: string; error: string; step: string }> = [];
+  const cleanupPaths: string[] = [file.path];
+  let extractedCount = 0;
+  let extractedBytes = 0;
+
+  const tempDir = path.join("/tmp/uploads", `extracted-${crypto.randomUUID()}`);
+  await fs.mkdir(tempDir, { recursive: true });
+  cleanupPaths.push(tempDir);
+
+  const zip = await unzipper.Open.file(file.path);
+  for (const entry of zip.files) {
+    if (entry.type !== "File") continue;
+    if (!isXmlFilename(entry.path)) continue;
+
+    if (extractedCount >= MAX_EXTRACTED_FILES) {
+      errors.push({
+        filename: file.originalname,
+        error: `Limite máximo de ${MAX_EXTRACTED_FILES} XMLs por arquivo compactado excedido`,
+        step: "extract",
+      });
+      break;
+    }
+
+    const uncompressedSize = (entry as any).uncompressedSize || (entry as any).vars?.uncompressedSize || 0;
+    extractedBytes += uncompressedSize;
+    if (extractedBytes > MAX_EXTRACTED_BYTES) {
+      errors.push({
+        filename: file.originalname,
+        error: `Tamanho total extraído excede ${Math.round(MAX_EXTRACTED_BYTES / (1024 * 1024))}MB`,
+        step: "extract",
+      });
+      break;
+    }
+
+    const safeName = path.basename(entry.path);
+    const destPath = path.join(tempDir, `${crypto.randomUUID()}-${safeName}`);
+    await pipeline(entry.stream(), fsSync.createWriteStream(destPath));
+
+    items.push({
+      path: destPath,
+      originalname: `${file.originalname}::${entry.path}`,
+    });
+    extractedCount++;
+  }
+
+  if (items.length === 0 && errors.length === 0) {
+    errors.push({
+      filename: file.originalname,
+      error: "Nenhum XML encontrado no arquivo ZIP",
+      step: "extract",
+    });
+  }
+
+  return { items, errors, cleanupPaths, totalFiles: items.length };
+}
+
+async function extractRarXmls(file: Express.Multer.File): Promise<ExpandResult> {
+  const items: UploadItem[] = [];
+  const errors: Array<{ filename: string; error: string; step: string }> = [];
+  const cleanupPaths: string[] = [file.path];
+  let extractedCount = 0;
+  let extractedBytes = 0;
+
+  const tempDir = path.join("/tmp/uploads", `extracted-${crypto.randomUUID()}`);
+  await fs.mkdir(tempDir, { recursive: true });
+  cleanupPaths.push(tempDir);
+
+  const data = await fs.readFile(file.path);
+  const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  const wasmBinary = await getUnrarWasmBinary();
+  const extractor = await createExtractorFromData({
+    data: arrayBuffer,
+    ...(wasmBinary ? { wasmBinary } : {}),
+  });
+  const listResult = extractor.getFileList();
+
+  if (!listResult || listResult[0]?.state !== "SUCCESS") {
+    errors.push({
+      filename: file.originalname,
+      error: `Erro ao listar arquivos do RAR: ${listResult?.[0]?.reason || listResult?.[0]?.state || "desconhecido"}`,
+      step: "extract",
+    });
+    return { items, errors, cleanupPaths, totalFiles: 0 };
+  }
+
+  const fileHeaders = Array.from(listResult[1]?.fileHeaders || []);
+  const xmlHeaders = fileHeaders.filter((h: any) => !h.flags?.directory && isXmlFilename(h.name));
+
+  if (xmlHeaders.length === 0) {
+    errors.push({
+      filename: file.originalname,
+      error: "Nenhum XML encontrado no arquivo RAR",
+      step: "extract",
+    });
+    return { items, errors, cleanupPaths, totalFiles: 0 };
+  }
+
+  if (xmlHeaders.length > MAX_EXTRACTED_FILES) {
+    errors.push({
+      filename: file.originalname,
+      error: `Limite máximo de ${MAX_EXTRACTED_FILES} XMLs por arquivo compactado excedido`,
+      step: "extract",
+    });
+    return { items, errors, cleanupPaths, totalFiles: 0 };
+  }
+
+  const extractResult = extractor.extract({ files: xmlHeaders.map((h: any) => h.name) });
+  if (!extractResult || extractResult[0]?.state !== "SUCCESS") {
+    errors.push({
+      filename: file.originalname,
+      error: `Erro ao extrair arquivos do RAR: ${extractResult?.[0]?.reason || extractResult?.[0]?.state || "desconhecido"}`,
+      step: "extract",
+    });
+    return { items, errors, cleanupPaths, totalFiles: 0 };
+  }
+
+  const extractedFiles = Array.from(extractResult[1]?.files || []);
+  for (const fileEntry of extractedFiles) {
+    if (extractedCount >= MAX_EXTRACTED_FILES) break;
+
+    const name = fileEntry.fileHeader?.name || "arquivo.xml";
+    if (!isXmlFilename(name)) continue;
+
+    const buffer =
+      fileEntry.extract?.buffer ||
+      fileEntry.extract?.[0]?.buffer ||
+      fileEntry.extract?.[0] ||
+      fileEntry.extract;
+
+    if (!buffer || (typeof buffer !== "string" && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array))) {
+      continue;
+    }
+
+    const fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    extractedBytes += fileBuffer.length;
+    if (extractedBytes > MAX_EXTRACTED_BYTES) {
+      errors.push({
+        filename: file.originalname,
+        error: `Tamanho total extraído excede ${Math.round(MAX_EXTRACTED_BYTES / (1024 * 1024))}MB`,
+        step: "extract",
+      });
+      break;
+    }
+
+    const safeName = path.basename(name);
+    const destPath = path.join(tempDir, `${crypto.randomUUID()}-${safeName}`);
+    await fs.writeFile(destPath, fileBuffer);
+
+    items.push({
+      path: destPath,
+      originalname: `${file.originalname}::${name}`,
+    });
+    extractedCount++;
+  }
+
+  if (items.length === 0 && errors.length === 0) {
+    errors.push({
+      filename: file.originalname,
+      error: "Nenhum XML encontrado no arquivo RAR",
+      step: "extract",
+    });
+  }
+
+  return { items, errors, cleanupPaths, totalFiles: items.length };
+}
+
+async function expandUploadedFiles(files: Express.Multer.File[]): Promise<ExpandResult> {
+  const allItems: UploadItem[] = [];
+  const allErrors: Array<{ filename: string; error: string; step: string }> = [];
+  const cleanupPaths: string[] = [];
+
+  for (const file of files) {
+    const lowerName = file.originalname.toLowerCase();
+    if (isXmlFilename(lowerName)) {
+      allItems.push({ path: file.path, originalname: file.originalname });
+      continue;
+    }
+
+    if (isZipFilename(lowerName)) {
+      const result = await extractZipXmls(file);
+      allItems.push(...result.items);
+      allErrors.push(...result.errors);
+      cleanupPaths.push(...result.cleanupPaths);
+      continue;
+    }
+
+    if (isRarFilename(lowerName)) {
+      const result = await extractRarXmls(file);
+      allItems.push(...result.items);
+      allErrors.push(...result.errors);
+      cleanupPaths.push(...result.cleanupPaths);
+      continue;
+    }
+
+    allErrors.push({
+      filename: file.originalname,
+      error: "Formato de arquivo não suportado. Use XML, ZIP ou RAR.",
+      step: "validation",
+    });
+    cleanupPaths.push(file.path);
+  }
+
+  const dedupedItems: UploadItem[] = [];
+  const preferredByBase = new Map<string, UploadItem>();
+
+  for (const item of allItems) {
+    const baseName = normalizeXmlArchiveName(path.basename(item.originalname));
+    const isProc = item.originalname.toLowerCase().includes("-procnfe.xml");
+    const existing = preferredByBase.get(baseName);
+
+    if (!existing) {
+      preferredByBase.set(baseName, item);
+      continue;
+    }
+
+    const existingIsProc = existing.originalname.toLowerCase().includes("-procnfe.xml");
+    if (isProc && !existingIsProc) {
+      preferredByBase.set(baseName, item);
+    }
+  }
+
+  for (const item of preferredByBase.values()) {
+    dedupedItems.push(item);
+  }
+
+  return {
+    items: dedupedItems,
+    errors: allErrors,
+    cleanupPaths,
+    totalFiles: dedupedItems.length + allErrors.length,
+  };
+}
+
 /**
  * Envia email de ativação para novo usuário
  */
-async function sendActivationEmail(user: any, company: any, activationToken: string): Promise<void> {
-  const activationLink = `${process.env.APP_URL || 'http://localhost:5000'}/activate/${activationToken}`;
+async function sendActivationEmail(
+  user: any,
+  company: any,
+  activationToken: string,
+  globalEmailSettings?: any
+): Promise<void> {
+  const appUrl = process.env.APP_URL || 'http://localhost:5000';
+  const activationLink = `${appUrl}/activate/${activationToken}`;
+  const companyName = company?.razaoSocial || company?.nomeFantasia || 'a empresa';
   
   const emailHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -66,9 +410,18 @@ async function sendActivationEmail(user: any, company: any, activationToken: str
         
         <p>Olá <strong>${user.name}</strong>,</p>
         
-        <p>Você foi adicionado à empresa <strong>${company.razaoSocial || company.nomeFantasia}</strong> no sistema Adapta Fiscal.</p>
+        <p>Você foi adicionado à empresa <strong>${companyName}</strong> no sistema <strong>Adapta Fiscal</strong>.</p>
         
         <p>Para começar a usar o sistema, você precisa ativar sua conta e definir sua senha.</p>
+        
+        <div style="background: #f0fdf4; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10B981;">
+          <p style="margin: 0;"><strong>📱 Informações do Sistema:</strong></p>
+          <p style="margin: 10px 0 0 0;">
+            <strong>Nome do Sistema:</strong> Adapta Fiscal<br>
+            <strong>URL de Acesso:</strong> <a href="${appUrl}" style="color: #059669;">${appUrl}</a><br>
+            <strong>Seu Email:</strong> ${user.email}
+          </p>
+        </div>
         
         <div style="text-align: center; margin: 30px 0;">
           <a href="${activationLink}" 
@@ -99,11 +452,11 @@ async function sendActivationEmail(user: any, company: any, activationToken: str
     </div>
   `;
 
-  await sendEmail({
+  await sendPublicEmail({
     to: user.email,
     subject: "Ative sua conta - Adapta Fiscal",
     html: emailHtml,
-  });
+  }, globalEmailSettings);
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -122,11 +475,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const passwordHash = await hashPassword(password);
+      
+      // Gera token de ativação
+      const activationToken = crypto.randomUUID();
+      const activationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
+
       const user = await storage.createUser({
         email,
         passwordHash,
         name,
         role,
+        active: false, // Inativo até ativar
+        activationToken,
+        activationExpiresAt,
       });
 
       await storage.logAction({
@@ -135,11 +496,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         details: JSON.stringify({ email }),
       });
 
-      const token = generateToken(user.id, user.email, user.role);
+      // Envia email de ativação (assíncrono)
+      const company = { razaoSocial: "Adapta Fiscal", nomeFantasia: "Adapta Fiscal" };
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      sendActivationEmail(user, company, activationToken, globalEmailSettings).catch(err => {
+        console.error("Error sending activation email:", err);
+      });
 
+      // Não retorna token pois usuário precisa ativar conta primeiro
       res.json({
+        message: "Usuário criado com sucesso! Verifique seu email para ativar a conta.",
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
-        token,
       });
     } catch (error) {
       logger.error("Erro ao registrar usuário", error instanceof Error ? error : new Error(String(error)), {
@@ -424,7 +791,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const company = companies[0] || { razaoSocial: "Adapta Fiscal" };
 
       // Reenvia email
-      await sendActivationEmail(user, company, activationToken);
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      await sendActivationEmail(user, company, activationToken, globalEmailSettings);
 
       res.json({ message: "Novo link de ativação enviado por email" });
     } catch (error) {
@@ -481,11 +849,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         </div>
       `;
 
-      await sendEmail(
-        user.email,
-        'Redefinir Senha - Adapta Fiscal',
-        emailHtml
-      );
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      await sendPublicEmail({
+        to: user.email,
+        subject: "Redefinir Senha - Adapta Fiscal",
+        html: emailHtml,
+      }, globalEmailSettings);
 
       await storage.logAction({
         userId: user.id,
@@ -553,6 +922,289 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============= PUBLIC ROUTES - Cadastro de Empresa =============
+  
+  // POST /api/public/check-cnpj - Verifica CNPJ e busca dados se não existe
+  app.post("/api/public/check-cnpj", async (req, res) => {
+    try {
+      const { cnpj } = req.body;
+
+      if (!cnpj) {
+        return res.status(400).json({ error: "CNPJ é obrigatório" });
+      }
+
+      const cleanedCnpj = cleanCnpj(cnpj);
+
+      // Verifica se empresa já existe
+      const existingCompany = await storage.getCompanyByCnpj(cleanedCnpj);
+      
+      if (existingCompany) {
+        // Busca emails vinculados
+        const users = await storage.getCompanyUsers(existingCompany.id);
+        const emails = users.map(u => ({
+          email: u.email,
+          name: u.name,
+          active: u.active,
+        }));
+
+        return res.json({
+          exists: true,
+          company: {
+            id: existingCompany.id,
+            cnpj: existingCompany.cnpj,
+            razaoSocial: existingCompany.razaoSocial,
+            nomeFantasia: existingCompany.nomeFantasia,
+            inscricaoEstadual: existingCompany.inscricaoEstadual,
+            telefone: existingCompany.telefone,
+            email: existingCompany.email,
+            rua: existingCompany.rua,
+            numero: existingCompany.numero,
+            bairro: existingCompany.bairro,
+            cidade: existingCompany.cidade,
+            uf: existingCompany.uf,
+            cep: existingCompany.cep,
+          },
+          emails: emails,
+        });
+      }
+
+      // Busca na ReceitaWS
+      const cnpjData = await fetchCNPJData(cleanedCnpj);
+      
+      if (!cnpjData.success || !cnpjData.data) {
+        return res.status(400).json({
+          error: cnpjData.error || "CNPJ não encontrado na ReceitaWS",
+        });
+      }
+
+      return res.json({
+        exists: false,
+        companyData: cnpjData.data,
+      });
+    } catch (error) {
+      console.error("Check CNPJ error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/public/create-company - Cria empresa após confirmação
+  app.post("/api/public/create-company", async (req, res) => {
+    try {
+      const { cnpj, confirm } = req.body;
+
+      if (!cnpj) {
+        return res.status(400).json({ error: "CNPJ é obrigatório" });
+      }
+
+      if (!confirm) {
+        return res.status(400).json({ error: "Confirmação é obrigatória" });
+      }
+
+      const cleanedCnpj = cleanCnpj(cnpj);
+
+      // Verifica se já existe
+      const existingCompany = await storage.getCompanyByCnpj(cleanedCnpj);
+      if (existingCompany) {
+        return res.status(400).json({ 
+          error: "Empresa já cadastrada",
+          companyId: existingCompany.id,
+        });
+      }
+
+      // Busca dados na ReceitaWS
+      const cnpjData = await fetchCNPJData(cleanedCnpj);
+      
+      if (!cnpjData.success || !cnpjData.data) {
+        return res.status(400).json({
+          error: cnpjData.error || "CNPJ não encontrado na ReceitaWS",
+        });
+      }
+
+      // Cria empresa
+      const company = await storage.createCompany({
+        cnpj: cleanedCnpj,
+        razaoSocial: cnpjData.data.razaoSocial,
+        nomeFantasia: cnpjData.data.nomeFantasia || cnpjData.data.razaoSocial,
+        rua: cnpjData.data.rua,
+        numero: cnpjData.data.numero,
+        bairro: cnpjData.data.bairro,
+        cidade: cnpjData.data.cidade,
+        uf: cnpjData.data.uf,
+        cep: cnpjData.data.cep,
+        telefone: cnpjData.data.telefone,
+        email: cnpjData.data.email,
+        ativo: true,
+        status: 2, // Liberado
+      });
+
+      res.json({
+        success: true,
+        company: {
+          id: company.id,
+          cnpj: company.cnpj,
+          razaoSocial: company.razaoSocial,
+          nomeFantasia: company.nomeFantasia,
+        },
+      });
+    } catch (error) {
+      console.error("Create company error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/public/link-email - Vincula email à empresa
+  app.post("/api/public/link-email", async (req, res) => {
+    try {
+      const { companyId, email, name } = req.body;
+
+      if (!companyId || !email) {
+        return res.status(400).json({ error: "companyId e email são obrigatórios" });
+      }
+
+      // Valida email
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: "Email inválido" });
+      }
+
+      // Verifica se empresa existe
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      // Verifica se email já existe
+      const existingUser = await storage.getUserByEmail(email);
+      let user = existingUser;
+      let wasCreated = false;
+
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+
+      if (!existingUser) {
+        // Cria novo usuário
+        const activationToken = crypto.randomUUID();
+        const activationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 horas
+        
+        // Gera senha temporária (usuário vai definir na ativação)
+        const tempPassword = crypto.randomBytes(16).toString('hex');
+        const passwordHash = await hashPassword(tempPassword);
+
+        user = await storage.createUser({
+          email,
+          passwordHash,
+          name: name || email.split('@')[0],
+          role: "cliente",
+          active: false,
+          activationToken,
+          activationExpiresAt,
+        });
+
+        wasCreated = true;
+
+        // Envia email de ativação
+        await sendActivationEmail(user, company, activationToken, globalEmailSettings);
+      } else {
+        // Email já existe - vincula à empresa
+        // Verifica se já está vinculado
+        const companies = await storage.getCompaniesByUser(user.id);
+        const alreadyLinked = companies.some(c => c.id === companyId);
+        
+        if (!alreadyLinked) {
+          await storage.linkUserToCompany(user.id, companyId);
+        }
+
+        // Envia email informativo
+        const appUrl = process.env.APP_URL || 'http://localhost:5000';
+        const emailHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); padding: 30px; text-align: center;">
+              <h1 style="color: white; margin: 0;">📄 Adapta Fiscal</h1>
+            </div>
+            
+            <div style="padding: 30px; background: #f9fafb;">
+              <h2 style="color: #1f2937; margin-top: 0;">Você foi vinculado à uma empresa</h2>
+              
+              <p>Olá <strong>${user.name}</strong>,</p>
+              
+              <p>Seu email foi vinculado à empresa <strong>${company.razaoSocial || company.nomeFantasia}</strong> no sistema Adapta Fiscal.</p>
+              
+              <div style="background: #f0fdf4; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10B981;">
+                <p style="margin: 0;"><strong>📱 Informações da Empresa:</strong></p>
+                <p style="margin: 10px 0 0 0;">
+                  <strong>Razão Social:</strong> ${company.razaoSocial}<br>
+                  ${company.nomeFantasia ? `<strong>Nome Fantasia:</strong> ${company.nomeFantasia}<br>` : ''}
+                  <strong>CNPJ:</strong> ${company.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')}<br>
+                  ${company.telefone ? `<strong>Telefone:</strong> ${company.telefone}<br>` : ''}
+                  ${company.email ? `<strong>Email:</strong> ${company.email}<br>` : ''}
+                </p>
+                ${company.rua ? `
+                  <p style="margin: 10px 0 0 0;">
+                    <strong>Endereço:</strong><br>
+                    ${company.rua}${company.numero ? `, ${company.numero}` : ''}<br>
+                    ${company.bairro ? `${company.bairro} - ` : ''}${company.cidade} / ${company.uf}<br>
+                    ${company.cep ? `CEP: ${company.cep.replace(/^(\d{5})(\d{3})$/, '$1-$2')}` : ''}
+                  </p>
+                ` : ''}
+              </div>
+              
+              <div style="background: #f0fdf4; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10B981;">
+                <p style="margin: 0;"><strong>📱 Informações do Sistema:</strong></p>
+                <p style="margin: 10px 0 0 0;">
+                  <strong>Nome do Sistema:</strong> Adapta Fiscal<br>
+                  <strong>URL de Acesso:</strong> <a href="${appUrl}" style="color: #059669;">${appUrl}</a><br>
+                  <strong>Seu Email:</strong> ${user.email}
+                </p>
+              </div>
+              
+              <p style="text-align: center; margin: 30px 0;">
+                <a href="${appUrl}" 
+                   style="display: inline-block; background: #10B981; color: white; padding: 15px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                  Acessar Sistema
+                </a>
+              </p>
+            </div>
+            
+            <div style="background: #1f2937; padding: 20px; text-align: center; color: #9ca3af; font-size: 12px;">
+              <p style="margin: 0;">Adapta Fiscal - Sistema de Gestão de XMLs</p>
+              <p style="margin: 5px 0 0 0;">Este é um email automático - Não responda</p>
+            </div>
+          </div>
+        `;
+
+        await sendPublicEmail({
+          to: user.email,
+          subject: "Você foi vinculado à uma empresa - Adapta Fiscal",
+          html: emailHtml,
+        }, globalEmailSettings);
+      }
+
+      // Garante que usuário está vinculado à empresa
+      const companies = await storage.getCompaniesByUser(user.id);
+      const alreadyLinked = companies.some(c => c.id === companyId);
+      
+      if (!alreadyLinked) {
+        await storage.linkUserToCompany(user.id, companyId);
+      }
+
+      res.json({
+        success: true,
+        wasCreated,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          active: user.active,
+        },
+        message: wasCreated 
+          ? "Usuário criado e email de ativação enviado" 
+          : "Usuário vinculado e email informativo enviado",
+      });
+    } catch (error) {
+      console.error("Link email error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // POST /api/auth/request-access - Solicita acesso ao sistema
   app.post("/api/auth/request-access", async (req, res) => {
     try {
@@ -601,11 +1253,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         `;
 
-        await sendEmail(
-          adminEmail,
-          `Nova Solicitação de Acesso - ${name}`,
-          emailHtml
-        );
+        const globalEmailSettings = await storage.getEmailGlobalSettings();
+        await sendPublicEmail({
+          to: adminEmail,
+          subject: `Nova Solicitação de Acesso - ${name}`,
+          html: emailHtml,
+        }, globalEmailSettings);
       }
 
       res.status(201).json({ 
@@ -650,6 +1303,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       await storage.updateAccessRequestStatus(id, newStatus, req.user!.id);
 
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+
       // Se aprovado, criar usuário
       if (action === 'approve') {
         // Gerar token de ativação
@@ -668,33 +1323,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           activationExpiresAt,
         });
 
-        // Enviar email de ativação
-        const activationLink = `${process.env.APP_URL || 'http://localhost:5000'}/activate/${activationToken}`;
-        
-        const emailHtml = `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h1 style="color: #333;">Solicitação Aprovada!</h1>
-            <p>Olá, ${request.name}!</p>
-            <p>Sua solicitação de acesso ao Adapta Fiscal foi aprovada!</p>
-            <p>Clique no botão abaixo para ativar sua conta e definir sua senha:</p>
-            <p style="text-align: center; margin: 30px 0;">
-              <a href="${activationLink}" 
-                 style="background-color: #4CAF50; color: white; padding: 15px 30px; 
-                        text-decoration: none; border-radius: 5px; display: inline-block;">
-                Ativar Minha Conta
-              </a>
-            </p>
-            <p style="color: #666; font-size: 12px;">
-              Este link expira em 24 horas.
-            </p>
-          </div>
-        `;
-
-        await sendEmail(
-          request.email,
-          'Solicitação de Acesso Aprovada - Adapta Fiscal',
-          emailHtml
-        );
+        // Enviar email de ativação usando função padrão
+        const company = { razaoSocial: "Adapta Fiscal", nomeFantasia: "Adapta Fiscal" };
+        await sendActivationEmail(user, company, activationToken, globalEmailSettings);
       } else {
         // Se rejeitado, enviar email informando
         const emailHtml = `
@@ -706,11 +1337,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         `;
 
-        await sendEmail(
-          request.email,
-          'Solicitação de Acesso - Adapta Fiscal',
-          emailHtml
-        );
+        await sendPublicEmail({
+          to: request.email,
+          subject: 'Solicitação de Acesso - Adapta Fiscal',
+          html: emailHtml,
+        }, globalEmailSettings);
       }
 
       await storage.logAction({
@@ -990,7 +1621,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.linkUserToCompany(user.id, id);
 
         // Envia email de ativação (assíncrono)
-        sendActivationEmail(user, company, activationToken).catch(err => {
+        const globalEmailSettings = await storage.getEmailGlobalSettings();
+        sendActivationEmail(user, company, activationToken, globalEmailSettings).catch(err => {
           console.error("Error sending activation email:", err);
         });
 
@@ -1158,6 +1790,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Email Routes
+  // Global email settings (admin only)
+  app.get("/api/email/global", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const settings = await storage.getEmailGlobalSettings();
+      res.json(settings || null);
+    } catch (error) {
+      console.error("Get global email settings error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.put("/api/email/global", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { host, port, user, password, fromEmail, fromName, useSsl, useTls } = req.body;
+      const existingSettings = await storage.getEmailGlobalSettings();
+
+      const resolvedPassword = password || existingSettings?.password;
+      if (!host || !port || !user || !resolvedPassword || !fromEmail || !fromName) {
+        return res.status(400).json({ error: "Campos obrigatórios: host, port, user, password, fromEmail, fromName" });
+      }
+
+      const settings = await storage.upsertEmailGlobalSettings({
+        host,
+        port: Number(port),
+        user,
+        password: resolvedPassword,
+        fromEmail,
+        fromName,
+        useSsl: !!useSsl,
+        useTls: !!useTls,
+      });
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "update_global_email_settings",
+        details: JSON.stringify({ host, fromEmail }),
+      });
+
+      res.json(settings);
+    } catch (error) {
+      console.error("Update global email settings error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/email/global/test", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const settings = await storage.getEmailGlobalSettings();
+      if (!settings || !hasGlobalEmailConfig(settings)) {
+        return res.status(400).json({ error: "Configuração global de email incompleta" });
+      }
+
+      const testResult = await testGlobalEmailConnection(settings);
+      if (!testResult.success) {
+        return res.status(400).json({ error: `Falha na conexão: ${testResult.error}` });
+      }
+
+      const sendResult = await sendGlobalEmail(settings, {
+        to: settings.fromEmail,
+        subject: "Teste de Email Global - Adapta Fiscal",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2>✅ Email Global configurado com sucesso!</h2>
+            <p>Esta é uma mensagem de teste da configuração global de email.</p>
+            <p><strong>Remetente:</strong> ${settings.fromName} &lt;${settings.fromEmail}&gt;</p>
+          </div>
+        `,
+      });
+
+      if (!sendResult.success) {
+        return res.status(500).json({ error: `Falha ao enviar email: ${sendResult.error}` });
+      }
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "test_global_email_settings",
+        details: JSON.stringify({ messageId: sendResult.messageId }),
+      });
+
+      res.json({
+        success: true,
+        message: "Email de teste enviado com sucesso!",
+        messageId: sendResult.messageId,
+      });
+    } catch (error) {
+      console.error("Test global email error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
   
   // Test email configuration
   app.post("/api/email/test", authMiddleware, async (req: AuthRequest, res) => {
@@ -1234,12 +1955,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const company = await storage.getCompany(companyId);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
-      }
-
-      if (!hasEmailConfig(company)) {
-        return res.status(400).json({ 
-          error: "Configuração de email incompleta" 
-        });
       }
 
       const xml = await storage.getXml(xmlId);
@@ -1326,10 +2041,12 @@ ${company.razaoSocial}
         ],
       };
 
-      const sendResult = await sendEmail(company, emailData);
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      const sendResult = await sendEmailWithFallback(company, emailData, globalEmailSettings);
 
       if (!sendResult.success) {
-        return res.status(500).json({ 
+        const isConfigError = sendResult.error?.includes("Configuração de email incompleta");
+        return res.status(isConfigError ? 400 : 500).json({ 
           error: `Falha ao enviar email: ${sendResult.error}` 
         });
       }
@@ -1388,18 +2105,14 @@ ${company.razaoSocial}
         dataFim: periodEnd as string,
       });
 
-      // Get inutilizações for the period
-      const allEvents = await storage.getXmlEventsByPeriod(
-        companyId as string,
-        periodStart as string,
-        periodEnd as string
-      );
-
-      const inutilizacoes = allEvents.filter(e => 
-        e.tipoEvento === "inutilizacao" && 
-        e.modelo === modelo &&
-        (!serie || e.serie === serie)
-      );
+      // Get inutilizações (consider year of inutilização, not only event date)
+      const allEvents = await storage.getXmlEventsByCompany(companyId as string);
+      const inutilizacoes = allEvents.filter((e) => {
+        if (e.tipoEvento !== "inutilizacao") return false;
+        if (e.modelo !== modelo) return false;
+        if (serie && e.serie !== serie) return false;
+        return true;
+      });
 
       // Extract numbers and sort
       const notasEmitidas = xmls
@@ -1509,12 +2222,35 @@ ${company.razaoSocial}
         .filter(s => s.tipo === "faltante")
         .reduce((sum, s) => sum + (s.numeroFim - s.numeroInicio + 1), 0);
 
+      const inconsistencias = notasEmitidas
+        .map((nota) => {
+          const inut = inutilizacoes.find((inutil) => {
+            const inicio = parseInt(inutil.numeroInicial || "0");
+            const fim = parseInt(inutil.numeroFinal || "0");
+            return nota.numero >= inicio && nota.numero <= fim;
+          });
+          if (!inut) return null;
+          return {
+            xmlId: nota.id,
+            numero: nota.numero,
+            chave: nota.chave,
+            dataEmissao: nota.data,
+            inutNumeroInicial: inut.numeroInicial,
+            inutNumeroFinal: inut.numeroFinal,
+            inutData: inut.dataEvento,
+            inutProtocolo: inut.protocolo,
+          };
+        })
+        .filter(Boolean);
+
       res.json({
         sequence,
+        inconsistencias,
         summary: {
           totalEmitidas: notasEmitidas.length,
           totalInutilizadas,
           totalFaltantes,
+          totalInconsistencias: inconsistencias.length,
           primeiroNumero,
           ultimoNumero,
           modelo: modelo === "55" ? "NFe" : "NFCe",
@@ -1624,6 +2360,7 @@ ${company.razaoSocial}
 
   // Upload events or inutilizações
   app.post("/api/xml-events/upload", authMiddleware, upload.array("files", 50), async (req: AuthRequest, res) => {
+    let cleanupPaths: string[] = [];
     try {
       const files = req.files as Express.Multer.File[];
       
@@ -1632,7 +2369,7 @@ ${company.razaoSocial}
       }
 
       // Get user's companies
-      const userCompanies = await getUserCompanies(req.user!.id);
+      const userCompanies = await storage.getCompaniesByUser(req.user!.id);
       if (!userCompanies || userCompanies.length === 0) {
         // Clean up files
         for (const file of files) {
@@ -1643,15 +2380,23 @@ ${company.razaoSocial}
 
       const userCnpjs = new Map(userCompanies.map(c => [c.cnpj, c.id]));
 
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+      const expanded = await expandUploadedFiles(files);
+      cleanupPaths = expanded.cleanupPaths;
+
       const results = {
         success: [] as any[],
-        errors: [] as any[],
-        total: files.length,
-        processed: 0,
+        errors: [...expanded.errors],
+        total: expanded.totalFiles,
+        processed: expanded.errors.length,
       };
 
+      if (uploadId) {
+        initUploadProgress(uploadId, expanded.totalFiles, expanded.errors.length);
+      }
+
       // Process each file
-      for (const file of files) {
+      for (const file of expanded.items) {
         results.processed++;
         
         try {
@@ -1701,22 +2446,40 @@ ${company.razaoSocial}
             continue;
           }
 
-          // 6. Save event XML to Contabo Storage
-          const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
-          if (!saveResult.success) {
-            results.errors.push({
-              filename: file.originalname,
-              error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
-              step: "storage",
-            });
-            await fs.unlink(file.path).catch(() => {});
-            continue;
-          }
-          const savedPath = saveResult.filepath || "";
-
-          // 7. Process event
+          // 6. Check duplicates before saving
           if (parsedEvent.tipo === "evento") {
             const eventoData = parsedEvent as ParsedEventoData;
+            const duplicate = await storage.getDuplicateXmlEventForEvento({
+              companyId,
+              chaveNFe: eventoData.chaveNFe,
+              tipoEvento: eventoData.tipoEvento,
+              numeroSequencia: eventoData.numeroSequencia ?? null,
+              protocolo: eventoData.protocolo ?? null,
+              dataEvento: eventoData.dataEvento ?? null,
+              horaEvento: eventoData.horaEvento ?? null,
+            });
+            if (duplicate) {
+              results.errors.push({
+                filename: file.originalname,
+                error: "Evento já importado anteriormente",
+                step: "duplicate",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+
+            // Save event XML to Contabo Storage
+            const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+            if (!saveResult.success) {
+              results.errors.push({
+                filename: file.originalname,
+                error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
+                step: "storage",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+            const savedPath = saveResult.filepath || "";
             
             // Find the XML by chave (if exists)
             const xml = await storage.getXmlByChave(eventoData.chaveNFe);
@@ -1761,6 +2524,38 @@ ${company.razaoSocial}
           } else {
             // Inutilização
             const inutData = parsedEvent as ParsedInutilizacaoData;
+            const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
+              companyId,
+              modelo: inutData.modelo,
+              serie: inutData.serie,
+              numeroInicial: inutData.numeroInicial,
+              numeroFinal: inutData.numeroFinal,
+              protocolo: inutData.protocolo ?? null,
+              dataEvento: inutData.dataEvento ?? null,
+              horaEvento: inutData.horaEvento ?? null,
+            });
+            if (duplicate) {
+              results.errors.push({
+                filename: file.originalname,
+                error: "Inutilização já importada anteriormente",
+                step: "duplicate",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+
+            // Save event XML to Contabo Storage
+            const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+            if (!saveResult.success) {
+              results.errors.push({
+                filename: file.originalname,
+                error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
+                step: "storage",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+            const savedPath = saveResult.filepath || "";
             
             await storage.createXmlEvent({
               companyId,
@@ -1823,18 +2618,18 @@ ${company.razaoSocial}
         userId: req.user?.id,
         fileCount: (req.files as Express.Multer.File[])?.length || 0,
       });
-      
-      // Clean up all files on error
-      const files = req.files as Express.Multer.File[];
-      if (files) {
-        for (const file of files) {
-          await fs.unlink(file.path).catch(() => {});
-        }
-      }
-      
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Internal server error" 
       });
+    } finally {
+      const files = (req.files as Express.Multer.File[]) || [];
+      const cleanupSet = new Set<string>([
+        ...cleanupPaths,
+        ...files.map((f) => f.path),
+      ]);
+      await Promise.all(
+        Array.from(cleanupSet).map((p) => fs.rm(p, { recursive: true, force: true }).catch(() => {}))
+      );
     }
   });
 
@@ -2548,12 +3343,6 @@ ${company.razaoSocial}
         return res.status(404).json({ error: "Company not found" });
       }
 
-      if (!hasEmailConfig(company)) {
-        return res.status(400).json({ 
-          error: "Configuração de email incompleta para esta empresa" 
-        });
-      }
-
       // Busca dados do contador
       const accountant = await storage.getAccountant(accountantId);
       if (!accountant) {
@@ -2621,10 +3410,12 @@ ${company.razaoSocial}
         ],
       };
 
-      const sendResult = await sendEmail(company, emailData);
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      const sendResult = await sendEmailWithFallback(company, emailData, globalEmailSettings);
 
       if (!sendResult.success) {
-        return res.status(500).json({ 
+        const isConfigError = sendResult.error?.includes("Configuração de email incompleta");
+        return res.status(isConfigError ? 400 : 500).json({ 
           error: `Falha ao enviar email: ${sendResult.error}` 
         });
       }
@@ -2840,6 +3631,62 @@ ${company.razaoSocial}
     }
   });
 
+  // Soft delete XML
+  app.delete("/api/xmls/:id", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: "Usuário não autenticado" });
+      }
+
+      const { id } = req.params;
+      const { companyId } = req.query;
+
+      if (!companyId || typeof companyId !== "string") {
+        return res.status(400).json({ error: "Company ID é obrigatório" });
+      }
+
+      const hasAccess = await canAccessCompany(user.id, companyId);
+      if (!hasAccess) {
+        return res.status(403).json({ error: "Sem acesso a esta empresa" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      const xml = await storage.getXml(id);
+      if (!xml) {
+        return res.status(404).json({ error: "XML não encontrado" });
+      }
+
+      if (xml.cnpjEmitente !== company.cnpj && xml.cnpjDestinatario !== company.cnpj) {
+        return res.status(403).json({ error: "XML não pertence à empresa informada" });
+      }
+
+      const deleted = await storage.softDeleteXml(id);
+
+      await storage.logAction({
+        userId: user.id,
+        action: "xml_soft_delete",
+        details: JSON.stringify({
+          xmlId: id,
+          companyId,
+          chave: xml.chave,
+        }),
+      });
+
+      res.json({
+        success: true,
+        deletedAt: deleted?.deletedAt ?? null,
+      });
+    } catch (error) {
+      console.error("Soft delete XML error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // POST /api/xmls/send-selected - Envia múltiplos XMLs selecionados por email
   app.post("/api/xmls/send-selected", authMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -3043,7 +3890,8 @@ ${company.razaoSocial}
         attachments,
       };
 
-      const result = await sendEmail(company, emailData);
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      const result = await sendEmailWithFallback(company, emailData, globalEmailSettings);
 
       if (!result.success) {
         // Remover arquivo ZIP temporário mesmo em caso de erro
@@ -3054,7 +3902,8 @@ ${company.razaoSocial}
             console.warn("Erro ao remover arquivo ZIP temporário:", err);
           }
         }
-        return res.status(500).json({ 
+        const isConfigError = result.error?.includes("Configuração de email incompleta");
+        return res.status(isConfigError ? 400 : 500).json({ 
           error: result.error || "Erro ao enviar email" 
         });
       }
@@ -3185,10 +4034,12 @@ ${company.razaoSocial}
         ],
       };
 
-      const result = await sendEmail(company, emailData);
+      const globalEmailSettings = await storage.getEmailGlobalSettings();
+      const result = await sendEmailWithFallback(company, emailData, globalEmailSettings);
 
       if (!result.success) {
-        return res.status(500).json({ 
+        const isConfigError = result.error?.includes("Configuração de email incompleta");
+        return res.status(isConfigError ? 400 : 500).json({ 
           error: result.error || "Erro ao enviar email" 
         });
       }
@@ -3250,6 +4101,7 @@ ${company.razaoSocial}
 
   // Upload XMLs Route - Batch processing
   app.post("/api/upload", authMiddleware, upload.array("files", 100), async (req: AuthRequest, res) => {
+    let cleanupPaths: string[] = [];
     try {
       const files = req.files as Express.Multer.File[];
 
@@ -3258,24 +4110,33 @@ ${company.razaoSocial}
         return res.status(400).json({ error: "No files uploaded" });
       }
 
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+
       // Busca todas as empresas do usuário para categorização
       const userCompanies = await storage.getCompaniesByUser(req.user!.id);
       const userCnpjs = new Map(userCompanies.map(c => [c.cnpj, c.id]));
 
+      const expanded = await expandUploadedFiles(files);
+      cleanupPaths = expanded.cleanupPaths;
+
       const results = {
         success: [] as any[],
-        errors: [] as any[],
-        total: files.length,
-        processed: 0,
+        errors: [...expanded.errors],
+        total: expanded.totalFiles,
+        processed: expanded.errors.length,
       };
 
+      if (uploadId) {
+        initUploadProgress(uploadId, expanded.totalFiles, expanded.errors.length);
+      }
+
       // Processa cada arquivo
-      for (const file of files) {
-        results.processed++;
-        
+      for (const file of expanded.items) {
+        let hadError = false;
         try {
           // 1. Validação de extensão
           if (!file.originalname.toLowerCase().endsWith('.xml')) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: "Arquivo não é XML (extensão inválida)",
@@ -3290,6 +4151,7 @@ ${company.razaoSocial}
 
           // 3. Validação básica de estrutura XML NFe
           if (!isValidNFeXml(xmlContent)) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: "Arquivo não é um XML de NFe/NFCe válido",
@@ -3304,6 +4166,7 @@ ${company.razaoSocial}
           try {
             parsedXml = await parseXmlContent(xmlContent);
           } catch (parseError) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: parseError instanceof Error ? parseError.message : "Erro ao parsear XML",
@@ -3315,6 +4178,7 @@ ${company.razaoSocial}
 
           // 5. Validação da chave
           if (!validateChave(parsedXml.chave)) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: "Chave de acesso inválida (deve ter 44 dígitos numéricos)",
@@ -3328,6 +4192,7 @@ ${company.razaoSocial}
           // 6. Verificação de duplicata no banco de dados
           const existingInDb = await storage.getXmlByChave(parsedXml.chave);
           if (existingInDb) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: "XML duplicado (chave já existe no banco de dados)",
@@ -3341,6 +4206,7 @@ ${company.razaoSocial}
           // 7. Verificação de duplicata no storage
           const existingInStorage = await storageFileExists(parsedXml.chave, "validated");
           if (existingInStorage) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: "XML duplicado (arquivo já existe no storage)",
@@ -3385,6 +4251,7 @@ ${company.razaoSocial}
           // 10. Salva arquivo no Contabo Storage
           const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
           if (!saveResult.success) {
+            hadError = true;
             results.errors.push({
               filename: file.originalname,
               error: saveResult.error || "Erro ao salvar arquivo no Contabo Storage",
@@ -3428,6 +4295,7 @@ ${company.razaoSocial}
           });
 
         } catch (error) {
+          hadError = true;
           console.error("Error processing file:", file.originalname, error);
           results.errors.push({
             filename: file.originalname,
@@ -3435,6 +4303,11 @@ ${company.razaoSocial}
             step: "processing",
           });
           await fs.unlink(file.path).catch(() => {});
+        } finally {
+          results.processed += 1;
+          if (uploadId) {
+            bumpUploadProgress(uploadId, hadError);
+          }
         }
       }
 
@@ -3450,6 +4323,10 @@ ${company.razaoSocial}
         }),
       });
 
+      if (uploadId) {
+        completeUploadProgress(uploadId);
+      }
+
       // Retorna resultado
       res.json({
         ...results,
@@ -3458,11 +4335,34 @@ ${company.razaoSocial}
 
     } catch (error) {
       console.error("Upload error:", error);
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+      if (uploadId) {
+        completeUploadProgress(uploadId);
+      }
       res.status(500).json({ 
         error: "Internal server error",
         message: error instanceof Error ? error.message : "Erro desconhecido",
       });
+    } finally {
+      const files = (req.files as Express.Multer.File[]) || [];
+      const cleanupSet = new Set<string>([
+        ...cleanupPaths,
+        ...files.map((f) => f.path),
+      ]);
+      await Promise.all(
+        Array.from(cleanupSet).map((p) => fs.rm(p, { recursive: true, force: true }).catch(() => {}))
+      );
     }
+  });
+
+  // Upload progress
+  app.get("/api/upload/progress/:uploadId", authMiddleware, async (req: AuthRequest, res) => {
+    const { uploadId } = req.params;
+    const progress = uploadProgressMap.get(uploadId);
+    if (!progress) {
+      return res.status(404).json({ error: "Upload não encontrado" });
+    }
+    return res.json(progress);
   });
 
   // DANFE Routes - Geração de DANFE em PDF

@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-import type { Company } from "@shared/schema";
+import type { Company, EmailGlobalSettings } from "@shared/schema";
 
 /**
  * Interface para configuração de email
@@ -96,6 +96,42 @@ export function createTransporterFromCompany(company: Company) {
   });
 }
 
+export function hasGlobalEmailConfig(settings?: EmailGlobalSettings | null): boolean {
+  return !!(
+    settings?.host &&
+    settings?.port &&
+    settings?.user &&
+    settings?.password
+  );
+}
+
+export function createTransporterFromGlobalSettings(settings: EmailGlobalSettings) {
+  const port = settings.port || 587;
+  let secure = false;
+  let requireTLS: boolean | undefined;
+
+  if (settings.useSsl && port === 465) {
+    secure = true;
+  } else if (settings.useTls && port === 587) {
+    secure = false;
+    requireTLS = true;
+  } else {
+    secure = settings.useSsl;
+    requireTLS = settings.useTls;
+  }
+
+  return createTransporter({
+    host: settings.host,
+    port,
+    secure,
+    auth: {
+      user: settings.user,
+      pass: settings.password,
+    },
+    requireTLS,
+  });
+}
+
 /**
  * Envia um email usando a configuração da empresa
  */
@@ -128,6 +164,116 @@ export async function sendEmail(
   }
 }
 
+export async function sendGlobalEmail(
+  settings: EmailGlobalSettings,
+  emailData: EmailData
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  try {
+    const transporter = createTransporterFromGlobalSettings(settings);
+    const fromName = settings.fromName || "Adapta Fiscal";
+    const fromEmail = settings.fromEmail || settings.user;
+
+    const info = await transporter.sendMail({
+      from: `"${fromName}" <${fromEmail}>`,
+      to: Array.isArray(emailData.to) ? emailData.to.join(", ") : emailData.to,
+      subject: emailData.subject,
+      text: emailData.text,
+      html: emailData.html,
+      attachments: emailData.attachments,
+    });
+
+    return {
+      success: true,
+      messageId: info.messageId,
+    };
+  } catch (error) {
+    console.error("Erro ao enviar email global:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Erro desconhecido ao enviar email",
+    };
+  }
+}
+
+export async function sendEmailWithFallback(
+  company: Company,
+  emailData: EmailData,
+  globalSettings?: EmailGlobalSettings | null
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  if (hasEmailConfig(company)) {
+    return sendEmail(company, emailData);
+  }
+
+  if (globalSettings && hasGlobalEmailConfig(globalSettings)) {
+    return sendGlobalEmail(globalSettings, emailData);
+  }
+
+  return {
+    success: false,
+    error: "Configuração de email incompleta. Configure o SMTP da empresa ou o email global.",
+  };
+}
+
+/**
+ * Envia um email usando configuração global do sistema (variáveis de ambiente)
+ * Usado para emails públicos como ativação de conta, recuperação de senha, etc.
+ */
+export async function sendPublicEmail(
+  emailData: EmailData,
+  globalSettings?: EmailGlobalSettings | null
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  try {
+    if (globalSettings && hasGlobalEmailConfig(globalSettings)) {
+      return await sendGlobalEmail(globalSettings, emailData);
+    }
+
+    // Verifica se há configuração de email global
+    const emailHost = process.env.EMAIL_HOST;
+    const emailPort = process.env.EMAIL_PORT ? parseInt(process.env.EMAIL_PORT) : 587;
+    const emailUser = process.env.EMAIL_USER;
+    const emailPassword = process.env.EMAIL_PASSWORD;
+    const emailFrom = process.env.EMAIL_FROM || `"Adapta Fiscal" <${emailUser || 'noreply@adaptafiscal.com'}>`;
+
+    if (!emailHost || !emailUser || !emailPassword) {
+      return {
+        success: false,
+        error: "Configuração de email global não encontrada. Configure EMAIL_HOST, EMAIL_USER e EMAIL_PASSWORD nas variáveis de ambiente.",
+      };
+    }
+
+    const transporter = createTransporter({
+      host: emailHost,
+      port: emailPort,
+      secure: emailPort === 465,
+      auth: {
+        user: emailUser,
+        pass: emailPassword,
+      },
+      requireTLS: emailPort === 587,
+    });
+
+    const info = await transporter.sendMail({
+      from: emailFrom,
+      to: Array.isArray(emailData.to) ? emailData.to.join(", ") : emailData.to,
+      subject: emailData.subject,
+      text: emailData.text,
+      html: emailData.html,
+      attachments: emailData.attachments,
+    });
+
+    return {
+      success: true,
+      messageId: info.messageId,
+    };
+  } catch (error) {
+    console.error("Erro ao enviar email público:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Erro desconhecido ao enviar email",
+    };
+  }
+}
+
 /**
  * Verifica se a configuração de email da empresa está completa
  */
@@ -151,6 +297,21 @@ export async function testEmailConnection(company: Company): Promise<{
     const transporter = createTransporterFromCompany(company);
     await transporter.verify();
     
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Erro ao testar conexão",
+    };
+  }
+}
+
+export async function testGlobalEmailConnection(
+  settings: EmailGlobalSettings
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const transporter = createTransporterFromGlobalSettings(settings);
+    await transporter.verify();
     return { success: true };
   } catch (error) {
     return {

@@ -31,11 +31,19 @@ export default function Login() {
         description: `Bem-vindo, ${data.user.name}`,
       });
       
-      setLocation("/dashboard");
+      setLocation("/selecionar-empresa");
     } catch (error: any) {
+      const rawMessage = typeof error?.message === "string" ? error.message : "";
+      const friendlyMessage = rawMessage.startsWith("401") || rawMessage.includes("Invalid credentials")
+        ? "Email ou senha incorretos. Verifique suas credenciais e tente novamente."
+        : rawMessage.startsWith("403")
+          ? "Sua conta está inativa ou sem permissão de acesso. Fale com o suporte."
+          : rawMessage.startsWith("429")
+            ? "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente."
+            : "Não foi possível acessar sua conta agora. Tente novamente em instantes.";
       toast({
-        title: "Erro no login",
-        description: error.message || "Email ou senha inválidos",
+        title: "Não foi possível entrar",
+        description: friendlyMessage,
         variant: "destructive",
       });
     } finally {
@@ -145,19 +153,7 @@ export default function Login() {
               Conta inativa?{" "}
               <button 
                 type="button"
-                onClick={() => {
-                  const email = prompt("Digite seu email para reenviar o link de ativação:");
-                  if (email) {
-                    fetch("/api/auth/resend-activation", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ email }),
-                    })
-                      .then(res => res.json())
-                      .then(data => alert(data.message || "Email enviado!"))
-                      .catch(err => alert("Erro ao enviar email"));
-                  }
-                }}
+                onClick={() => setLocation("/reenviar-ativacao")}
                 className="text-primary hover:underline font-medium"
               >
                 Reenviar ativação

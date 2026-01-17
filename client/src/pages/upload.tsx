@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import DashboardLayout from "@/components/dashboard-layout";
 import { ErrorBoundaryPage } from "@/components/ErrorBoundaryPage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,10 +30,55 @@ interface UploadedFile {
   totalNota?: string;
 }
 
+interface UploadProgressInfo {
+  total: number;
+  processed: number;
+  errors: number;
+  done: boolean;
+}
+
 export default function Upload() {
   const { toast } = useToast();
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [progressInfo, setProgressInfo] = useState<UploadProgressInfo | null>(null);
+  const progressIntervalRef = useRef<number | null>(null);
+  const currentUploadIdRef = useRef<string | null>(null);
+
+  const stopProgressPolling = () => {
+    if (progressIntervalRef.current !== null) {
+      window.clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
+
+  const startProgressPolling = (uploadId: string) => {
+    stopProgressPolling();
+    progressIntervalRef.current = window.setInterval(async () => {
+      try {
+        const res = await fetch(`/api/upload/progress/${uploadId}`, {
+          headers: getAuthHeader(),
+          credentials: "include",
+        });
+        if (!res.ok) {
+          return;
+        }
+        const data = await res.json();
+        setProgressInfo(data);
+        if (data.done) {
+          stopProgressPolling();
+        }
+      } catch {
+        // Silencia erros de polling
+      }
+    }, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopProgressPolling();
+    };
+  }, []);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles: UploadedFile[] = acceptedFiles.map((file) => ({
@@ -49,6 +94,10 @@ export default function Upload() {
     accept: {
       "text/xml": [".xml"],
       "application/xml": [".xml"],
+      "application/zip": [".zip"],
+      "application/x-zip-compressed": [".zip"],
+      "application/x-rar-compressed": [".rar"],
+      "application/vnd.rar": [".rar"],
     },
     multiple: true,
   });
@@ -71,13 +120,17 @@ export default function Upload() {
     if (filesToProcess.length === 0) {
       toast({
         title: "Nenhum arquivo para processar",
-        description: "Adicione arquivos XML para processar",
+        description: "Adicione arquivos XML ou ZIP/RAR com XMLs para processar",
         variant: "destructive",
       });
       return;
     }
 
     setIsProcessing(true);
+    const uploadId = (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    currentUploadIdRef.current = uploadId;
+    setProgressInfo({ total: filesToProcess.length, processed: 0, errors: 0, done: false });
+    startProgressPolling(uploadId);
 
     try {
       // Marca todos como processando
@@ -100,7 +153,10 @@ export default function Upload() {
       // Envia para API
       const res = await fetch("/api/upload", {
         method: "POST",
-        headers: getAuthHeader(),
+        headers: {
+          ...getAuthHeader(),
+          "X-Upload-Id": uploadId,
+        },
         body: formData,
         credentials: "include",
       });
@@ -111,6 +167,12 @@ export default function Upload() {
       }
 
       const result = await res.json();
+      setProgressInfo({
+        total: result.total ?? filesToProcess.length,
+        processed: result.processed ?? result.total ?? filesToProcess.length,
+        errors: result.errors?.length || 0,
+        done: true,
+      });
 
       // Atualiza status de cada arquivo baseado na resposta
       const successMap = new Map(
@@ -179,6 +241,7 @@ export default function Upload() {
         variant: "destructive",
       });
     } finally {
+      stopProgressPolling();
       setIsProcessing(false);
     }
   };
@@ -189,6 +252,7 @@ export default function Upload() {
 
   const clearAll = () => {
     setUploadedFiles([]);
+    setProgressInfo(null);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -210,7 +274,7 @@ export default function Upload() {
         <div>
           <h1 className="text-3xl font-bold">Upload de XMLs</h1>
           <p className="text-muted-foreground mt-1">
-            Faça upload de múltiplos arquivos XML para processamento em lote
+            Faça upload de arquivos XML ou ZIP/RAR com XMLs para processamento em lote
           </p>
         </div>
 
@@ -239,13 +303,13 @@ export default function Upload() {
               <h3 className="text-xl font-semibold mb-2">
                 {isDragActive
                   ? "Solte os arquivos aqui"
-                  : "Arraste XMLs aqui"}
+                  : "Arraste XMLs ou ZIP/RAR aqui"}
               </h3>
               <p className="text-muted-foreground text-center max-w-md">
                 ou clique para selecionar arquivos do seu computador
               </p>
               <p className="text-sm text-muted-foreground mt-4">
-                Formatos aceitos: .xml | Tamanho máximo: 10MB por arquivo
+                Formatos aceitos: .xml, .zip, .rar | Tamanho máximo: 200MB por arquivo
               </p>
             </div>
           </CardContent>
@@ -273,6 +337,12 @@ export default function Upload() {
                         </p>
                       )}
                     </div>
+                  )}
+                  {isProcessing && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Processando {progressInfo?.processed ?? 0} de {progressInfo?.total ?? uploadedFiles.length}
+                      {progressInfo?.errors ? ` (${progressInfo.errors} com erro)` : ""}
+                    </p>
                   )}
                 </div>
                 <div className="flex gap-2">

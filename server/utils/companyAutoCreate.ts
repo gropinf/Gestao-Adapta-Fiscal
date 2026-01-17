@@ -4,7 +4,7 @@
  */
 
 import { storage } from "../storage";
-import { sendEmail } from "../emailService";
+import { sendPublicEmail } from "../emailService";
 import type { ParsedXmlData } from "../xmlParser";
 
 /**
@@ -148,15 +148,17 @@ async function notifyAdminNewCompany(company: any, xmlData: ParsedXmlData): Prom
       </div>
     `;
 
+    const globalEmailSettings = await storage.getEmailGlobalSettings();
+
     // Envia email para todos admins
     for (const admin of admins) {
       try {
         // Usa configuração de email padrão do sistema (não da empresa)
-        await sendEmail({
+        await sendPublicEmail({
           to: admin.email,
           subject: emailSubject,
           html: emailBody,
-        });
+        }, globalEmailSettings);
         
         console.log(`[AUTO-CREATE] ✉️ Notificação enviada para admin: ${admin.email}`);
       } catch (emailError) {

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -41,6 +42,7 @@ interface SequenceSummary {
   totalEmitidas: number;
   totalInutilizadas: number;
   totalFaltantes: number;
+  totalInconsistencias?: number;
   primeiroNumero: number | null;
   ultimoNumero: number | null;
   modelo: string;
@@ -55,9 +57,10 @@ export default function AnaliseSequenciaPage() {
   const [location, navigate] = useLocation();
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
   
-  // Set default dates (first day of current month to today)
+  // Set default dates (first day of previous month to last day of previous month)
   const hoje = new Date();
-  const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const primeiroDiaMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+  const ultimoDiaMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
   
   const formatDate = (date: Date) => {
     const year = date.getFullYear();
@@ -69,8 +72,8 @@ export default function AnaliseSequenciaPage() {
   const [filters, setFilters] = useState({
     companyId: currentCompanyId || "",
     modelo: "55",
-    periodStart: formatDate(primeiroDiaMes),
-    periodEnd: formatDate(hoje),
+    periodStart: formatDate(primeiroDiaMesAnterior),
+    periodEnd: formatDate(ultimoDiaMesAnterior),
   });
 
   // Atualiza companyId quando a empresa selecionada mudar
@@ -83,6 +86,20 @@ export default function AnaliseSequenciaPage() {
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [summary, setSummary] = useState<SequenceSummary | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showOnlyMissing, setShowOnlyMissing] = useState(false);
+  const [showInconsistencies, setShowInconsistencies] = useState(false);
+  const [inconsistencies, setInconsistencies] = useState<
+    Array<{
+      xmlId: string;
+      numero: number;
+      chave: string;
+      dataEmissao: string;
+      inutNumeroInicial: string;
+      inutNumeroFinal: string;
+      inutData: string;
+      inutProtocolo: string | null;
+    }>
+  >([]);
 
   // Removido carregamento automático - usuário deve clicar no botão "Analisar"
   // Isso evita erros ao acessar a página antes da empresa estar carregada
@@ -118,6 +135,7 @@ export default function AnaliseSequenciaPage() {
       const data = await response.json();
       setSequence(data.sequence);
       setSummary(data.summary);
+      setInconsistencies(data.inconsistencias || []);
     } catch (error) {
       toast({
         title: "Erro",
@@ -145,6 +163,9 @@ export default function AnaliseSequenciaPage() {
 
   const exportToText = () => {
     if (!summary || sequence.length === 0) return;
+    const exportSequence = showOnlyMissing
+      ? sequence.filter(item => item.tipo === "faltante")
+      : sequence;
 
     let text = `ANÁLISE DE SEQUÊNCIA - ${summary.modelo}\n`;
     if (summary.periodo) {
@@ -158,7 +179,7 @@ export default function AnaliseSequenciaPage() {
     text += `SEQUÊNCIA:\n`;
     text += `${"=".repeat(60)}\n\n`;
 
-    sequence.forEach(item => {
+    exportSequence.forEach(item => {
       if (item.tipo === "emitida") {
         text += `${formatNumero(item.numero!)}  ${formatDateBR(item.data!)}\n`;
       } else if (item.tipo === "inutilizada") {
@@ -177,6 +198,22 @@ export default function AnaliseSequenciaPage() {
       }
     });
 
+    if (inconsistencies.length > 0) {
+      text += `\n\nINCONSISTÊNCIAS:\n`;
+      text += `${"=".repeat(60)}\n\n`;
+      inconsistencies.forEach((item) => {
+        text += `Numero: ${formatNumero(item.numero)}\n`;
+        text += `Emitida em: ${formatDateBR(item.dataEmissao)}\n`;
+        text += `Chave: ${item.chave}\n`;
+        text += `Inutilizacao: ${item.inutNumeroInicial} a ${item.inutNumeroFinal} em ${formatDateBR(item.inutData)}`;
+        if (item.inutProtocolo) {
+          text += ` (Protocolo ${item.inutProtocolo})`;
+        }
+        text += `\nXML ID: ${item.xmlId}\n`;
+        text += `\n\n`;
+      });
+    }
+
     // Download
     const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -192,6 +229,53 @@ export default function AnaliseSequenciaPage() {
       title: "Exportado",
       description: "Análise exportada com sucesso",
     });
+  };
+
+  const filteredSequence = showOnlyMissing
+    ? sequence.filter(item => item.tipo === "faltante")
+    : sequence;
+
+  const handleDeleteXml = async (xmlId: string, numero: number) => {
+    if (!currentCompanyId) {
+      toast({
+        title: "Empresa não selecionada",
+        description: "Selecione uma empresa antes de excluir",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Excluir a nota ${formatNumero(numero)}? Esta ação remove o XML da nota da base.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/xmls/${xmlId}?companyId=${currentCompanyId}`, {
+        method: "DELETE",
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || "Erro ao excluir XML");
+      }
+
+      toast({
+        title: "XML excluído",
+        description: `Nota ${formatNumero(numero)} removida com sucesso`,
+      });
+
+      // Recarregar análise para refletir a exclusão
+      loadSequence();
+    } catch (error) {
+      toast({
+        title: "Erro ao excluir XML",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -271,6 +355,30 @@ export default function AnaliseSequenciaPage() {
                 </Button>
               </div>
             </div>
+            <div className="flex items-center gap-2 mt-4">
+              <Checkbox
+                id="show-only-missing"
+                checked={showOnlyMissing}
+                onCheckedChange={(checked) => setShowOnlyMissing(checked === true)}
+              />
+              <Label htmlFor="show-only-missing">Mostrar somente faltantes</Label>
+            </div>
+            <div className="flex items-center gap-3 mt-3">
+              <Button
+                variant={showInconsistencies ? "default" : "outline"}
+                size="sm"
+                onClick={() => setShowInconsistencies((prev) => !prev)}
+                disabled={!summary || inconsistencies.length === 0}
+              >
+                Mostrar inconsistências
+                {summary?.totalInconsistencias ? ` (${summary.totalInconsistencias})` : ""}
+              </Button>
+              {summary && inconsistencies.length === 0 && (
+                <span className="text-xs text-muted-foreground">
+                  Nenhuma inconsistência encontrada
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -330,18 +438,61 @@ export default function AnaliseSequenciaPage() {
           </Card>
         )}
 
+        {/* Inconsistencies Card */}
+        {showInconsistencies && inconsistencies.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Inconsistências Encontradas</CardTitle>
+              <CardDescription>
+                Notas emitidas que também aparecem como inutilizadas
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {inconsistencies.map((item) => (
+                  <div key={item.numero} className="flex flex-col gap-2 rounded border p-3">
+                    <div className="flex items-center gap-2 justify-between">
+                      <div className="flex items-center gap-2">
+                      <Badge variant="destructive">{formatNumero(item.numero)}</Badge>
+                      <span className="text-sm text-muted-foreground">
+                        Emitida em {formatDateBR(item.dataEmissao)}
+                      </span>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDeleteXml(item.xmlId, item.numero)}
+                      >
+                        Excluir XML da Nota
+                      </Button>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Inutilização: {item.inutNumeroInicial} a {item.inutNumeroFinal} em{" "}
+                      {formatDateBR(item.inutData)}
+                      {item.inutProtocolo ? ` (Protocolo ${item.inutProtocolo})` : ""}
+                    </div>
+                    <div className="text-xs text-muted-foreground font-mono">
+                      Chave: {item.chave}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Sequence Card */}
-        {sequence.length > 0 && (
+        {filteredSequence.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle>Sequência Completa</CardTitle>
               <CardDescription>
-                {sequence.length} registro(s) na sequência
+                {filteredSequence.length} registro(s) na sequência
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-1 font-mono text-sm">
-                {sequence.map((item, index) => (
+                {filteredSequence.map((item, index) => (
                   <div key={index} className="flex items-start gap-4 py-2 hover:bg-muted/50 px-2 rounded">
                     {item.tipo === "emitida" && (
                       <>
@@ -412,14 +563,16 @@ export default function AnaliseSequenciaPage() {
         )}
 
         {/* Empty State */}
-        {!loading && sequence.length === 0 && summary && (
+        {!loading && filteredSequence.length === 0 && summary && (
           <Card>
             <CardContent className="py-12">
               <div className="text-center text-muted-foreground">
                 <ListOrdered className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p className="text-lg font-medium">Nenhuma nota encontrada</p>
+                <p className="text-lg font-medium">Nenhum registro encontrado</p>
                 <p className="text-sm">
-                  Não foram encontradas notas emitidas no período selecionado
+                  {showOnlyMissing
+                    ? "Não há faltantes para os filtros selecionados"
+                    : "Não foram encontradas notas emitidas no período selecionado"}
                 </p>
               </div>
             </CardContent>

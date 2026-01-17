@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useCallback } from "react";
 import { Upload, FileText, CheckCircle, XCircle, AlertCircle, X, FileCheck } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { getAuthHeader } from "@/lib/auth";
 import DashboardLayout from "@/components/dashboard-layout";
+import { useDropzone } from "react-dropzone";
 
 export default function UploadEventosPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -19,29 +20,29 @@ export default function UploadEventosPage() {
     errors: any[];
     total: number;
   } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      const files = Array.from(event.target.files);
-      const xmlFiles = files.filter(file => 
-        file.name.toLowerCase().endsWith('.xml')
-      );
-      
-      if (xmlFiles.length < files.length) {
-        toast({
-          title: "Aviso",
-          description: `${files.length - xmlFiles.length} arquivo(s) não XML foram ignorados`,
-          variant: "destructive",
-        });
-      }
-      
-      setSelectedFiles(xmlFiles);
-      setUploadResults(null);
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) {
+      return;
     }
-  };
+    setSelectedFiles((prev) => [...prev, ...acceptedFiles]);
+    setUploadResults(null);
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      "text/xml": [".xml"],
+      "application/xml": [".xml"],
+      "application/zip": [".zip"],
+      "application/x-zip-compressed": [".zip"],
+      "application/x-rar-compressed": [".rar"],
+      "application/vnd.rar": [".rar"],
+    },
+    multiple: true,
+  });
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) {
@@ -111,9 +112,6 @@ export default function UploadEventosPage() {
   const clearAll = () => {
     setSelectedFiles([]);
     setUploadResults(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
   };
 
   const getTipoEventoLabel = (tipo: string): string => {
@@ -165,40 +163,47 @@ export default function UploadEventosPage() {
             Upload de Arquivos
           </CardTitle>
           <CardDescription>
-            Selecione um ou mais arquivos XML de eventos ou inutilizações
+            Selecione arquivos XML ou ZIP/RAR contendo XMLs de eventos ou inutilizações
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-start">
             <div className="flex-1">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".xml"
-                onChange={handleFileSelect}
-                disabled={uploading}
-                className="hidden"
-                id="file-upload"
-              />
-              <label htmlFor="file-upload">
-                <Button
-                  variant="outline"
-                  className="w-full cursor-pointer"
-                  disabled={uploading}
-                  asChild
-                >
-                  <span>
-                    <FileText className="mr-2 h-4 w-4" />
-                    Selecionar Arquivos XML
-                  </span>
-                </Button>
-              </label>
+              <div
+                {...getRootProps()}
+                className={`
+                  border-2 border-dashed rounded-xl min-h-32 flex flex-col items-center justify-center
+                  cursor-pointer transition-all p-6 text-center
+                  ${
+                    isDragActive
+                      ? "border-primary bg-primary/5 scale-[1.01]"
+                      : "border-border hover:border-primary/50 hover:bg-muted/30"
+                  }
+                `}
+              >
+                <input {...getInputProps()} />
+                <Upload
+                  className={`w-10 h-10 mb-3 ${
+                    isDragActive ? "text-primary" : "text-muted-foreground"
+                  }`}
+                />
+                <p className="font-medium">
+                  {isDragActive
+                    ? "Solte os arquivos aqui"
+                    : "Arraste XMLs ou ZIP/RAR aqui"}
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  ou clique para selecionar arquivos do seu computador
+                </p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Formatos aceitos: .xml, .zip, .rar
+                </p>
+              </div>
             </div>
             <Button
               onClick={handleUpload}
               disabled={selectedFiles.length === 0 || uploading}
-              className="min-w-[140px]"
+              className="min-w-[140px] mt-2"
             >
               {uploading ? (
                 <>

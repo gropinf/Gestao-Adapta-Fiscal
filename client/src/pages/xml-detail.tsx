@@ -44,7 +44,7 @@ import { ErrorBoundaryPage } from "@/components/ErrorBoundaryPage";
 
 export default function XmlDetail() {
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [, params] = useRoute("/xmls/:id");
   const xmlId = params?.id;
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
@@ -56,6 +56,7 @@ export default function XmlDetail() {
   const [emailTo, setEmailTo] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailText, setEmailText] = useState("Anexo Nota Fiscal");
+  const listLocation = `/xmls${location.includes("?") ? location.slice(location.indexOf("?")) : ""}`;
 
   // Fetch XML details with parsed data
   const { data: xmlData, isLoading } = useQuery({
@@ -311,7 +312,7 @@ export default function XmlDetail() {
             <div className="text-center">
               <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
               <h3 className="text-lg font-semibold">XML não encontrado</h3>
-              <Button className="mt-4" onClick={() => setLocation("/xmls")}>
+              <Button className="mt-4" onClick={() => setLocation(listLocation)}>
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Voltar para Lista
               </Button>
@@ -330,7 +331,7 @@ export default function XmlDetail() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => setLocation("/xmls")}>
+            <Button variant="ghost" size="icon" onClick={() => setLocation(listLocation)}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
             <div>

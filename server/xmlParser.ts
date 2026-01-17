@@ -230,31 +230,25 @@ export async function parseXmlContent(xmlContent: string): Promise<ParsedXmlData
     });
     
     // Detecta se é NFe ou NFCe pela estrutura
-    let nfeNode = getNestedValue(result, 'nfeProc.NFe.infNFe');
+    let nfeNode =
+      getNestedValue(result, 'nfeProc.NFe.infNFe') ||
+      getNestedValue(result, 'NFe.infNFe');
     let tipoDoc: "NFe" | "NFCe" = "NFe";
-    
+
     if (!nfeNode) {
-      // Tenta NFCe
-      nfeNode = getNestedValue(result, 'nfeProc.NFe.infNFe');
-      if (!nfeNode) {
-        throw new Error('Estrutura de NFe/NFCe não encontrada no XML');
-      }
-      
-      // Verifica se é NFCe pelo modelo
-      const modelo = extractValue(nfeNode, 'ide.mod');
-      if (modelo === '65') {
-        tipoDoc = "NFCe";
-      }
-    } else {
-      const modelo = extractValue(nfeNode, 'ide.mod');
-      if (modelo === '65') {
-        tipoDoc = "NFCe";
-      }
+      throw new Error('Estrutura de NFe/NFCe não encontrada no XML');
+    }
+
+    const modelo = extractValue(nfeNode, 'ide.mod');
+    if (modelo === '65') {
+      tipoDoc = "NFCe";
     }
     
     // Extrai chave de acesso
-    const chave = extractValue(nfeNode, 'Id')?.replace('NFe', '') || 
-                  extractValue(result, 'nfeProc.protNFe.infProt.chNFe') || '';
+    const chave =
+      extractValue(nfeNode, 'Id')?.replace('NFe', '') ||
+      extractValue(result, 'nfeProc.protNFe.infProt.chNFe') ||
+      '';
     
     if (!validateChave(chave)) {
       throw new Error('Chave de acesso inválida ou não encontrada');

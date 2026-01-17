@@ -76,6 +76,12 @@ export default function EnvioXmlEmail() {
 
   // Empresa selecionada atualmente
   const selectedCompany = companies?.find((c) => c.id === currentCompanyId);
+  const isEmailConfigured = Boolean(
+    selectedCompany?.emailUser &&
+      selectedCompany?.emailHost &&
+      selectedCompany?.emailPort &&
+      selectedCompany?.emailPassword
+  );
 
   // Carrega histórico ao montar o componente ou trocar de empresa
   useEffect(() => {
@@ -120,6 +126,14 @@ export default function EnvioXmlEmail() {
       toast({
         title: "Atenção",
         description: "Selecione uma empresa antes de enviar",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!isEmailConfigured) {
+      toast({
+        title: "Email não configurado",
+        description: "Configure o email SMTP da empresa antes de enviar.",
         variant: "destructive",
       });
       return;
@@ -280,8 +294,20 @@ export default function EnvioXmlEmail() {
                     )}
                   </span>
                 </div>
+                <div className="md:col-span-2">
+                  <span className="font-medium text-blue-700">Email Remetente:</span>{" "}
+                  <span className="text-blue-900">
+                    {selectedCompany.emailUser || "Não configurado"}
+                  </span>
+                </div>
               </div>
             </div>
+            {!isEmailConfigured && (
+              <div className="border border-red-200 bg-red-50 text-red-700 rounded-lg p-3 text-sm">
+                Email SMTP não configurado para esta empresa. Informe host, porta, usuário e senha
+                em Configurações da Empresa para habilitar o envio.
+              </div>
+            )}
 
             {/* Período de Emissão */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -345,12 +371,12 @@ export default function EnvioXmlEmail() {
                 <p className="text-sm text-red-500">{errors.destinationEmail.message}</p>
               )}
               <p className="text-xs text-muted-foreground">
-                Os XMLs serão compactados em um arquivo ZIP e enviados para este email
+                Os XMLs das notas e os eventos serão compactados em arquivos ZIP separados
               </p>
             </div>
 
             {/* Botão Enviar */}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full" disabled={loading || !isEmailConfigured}>
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />

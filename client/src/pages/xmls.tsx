@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DashboardLayout from "@/components/dashboard-layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,8 +27,10 @@ import {
   AlertCircle,
   File,
   Calendar,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -42,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface Xml {
   id: string;
@@ -60,23 +63,40 @@ interface Xml {
   cnpjDestinatario?: string;
 }
 
+interface XmlEvent {
+  id: string;
+  tipoEvento: string;
+  codigoEvento: string | null;
+  dataEvento: string;
+  horaEvento: string | null;
+  chaveNFe: string | null;
+  protocolo: string | null;
+  justificativa: string | null;
+  correcao: string | null;
+  ano: string | null;
+  serie: string | null;
+  numeroInicial: string | null;
+  numeroFinal: string | null;
+  cnpj: string | null;
+  modelo: string | null;
+}
+
 export default function Xmls() {
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
+  const queryClient = useQueryClient();
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
   const [searchTerm, setSearchTerm] = useState("");
   const [tipoDoc, setTipoDoc] = useState("all");
   const [categoria, setCategoria] = useState("all");
   const [statusValidacao, setStatusValidacao] = useState("all");
   const [tipoEmitDest, setTipoEmitDest] = useState("all"); // Filtro EMIT/DEST
+  const [viewType, setViewType] = useState<"xmls" | "events">("xmls");
+  const [eventTipo, setEventTipo] = useState("all");
+  const [eventModelo, setEventModelo] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // Set default dates (first day of current month to last day of current month)
-  const hoje = new Date();
-  const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-  const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-  
   const formatDate = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -84,22 +104,40 @@ export default function Xmls() {
     return `${year}-${month}-${day}`;
   };
   
-  const [dataInicial, setDataInicial] = useState(formatDate(primeiroDiaMes));
-  const [dataFinal, setDataFinal] = useState(formatDate(ultimoDiaMes));
+  const getDefaultDateRange = () => {
+    const hoje = new Date();
+    const primeiroDiaMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const ultimoDiaMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    return {
+      dataInicial: formatDate(primeiroDiaMesAnterior),
+      dataFinal: formatDate(ultimoDiaMesAnterior),
+    };
+  };
+
+  const defaultRange = getDefaultDateRange();
+  const [dataInicial, setDataInicial] = useState(defaultRange.dataInicial);
+  const [dataFinal, setDataFinal] = useState(defaultRange.dataFinal);
   // Estados para seleção múltipla
   const [selectedXmlIds, setSelectedXmlIds] = useState<Set<string>>(new Set());
   const [sendSelectedDialogOpen, setSendSelectedDialogOpen] = useState(false);
   const [sendingSelected, setSendingSelected] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [xmlToDelete, setXmlToDelete] = useState<Xml | null>(null);
+  const [deleteChallenge, setDeleteChallenge] = useState<{ a: number; b: number } | null>(null);
+  const [deleteAnswer, setDeleteAnswer] = useState("");
   // Estados do formulário de email para envio em lote
   const [emailToSelected, setEmailToSelected] = useState("");
   const [emailSubjectSelected, setEmailSubjectSelected] = useState("");
   const [emailTextSelected, setEmailTextSelected] = useState("");
   // Estados para os filtros que serão aplicados na busca
   const [appliedFilters, setAppliedFilters] = useState<{
+    view: "xmls" | "events";
     tipoDoc: string;
     categoria: string;
     statusValidacao: string;
     tipoEmitDest: string;
+    eventTipo: string;
+    eventModelo: string;
     search: string;
     dataInicio: string;
     dataFim: string;
@@ -114,7 +152,7 @@ export default function Xmls() {
         ...(appliedFilters || {}),
       },
     ],
-    enabled: !!currentCompanyId && !!appliedFilters, // Só busca quando appliedFilters está definido
+    enabled: !!currentCompanyId && !!appliedFilters && appliedFilters.view === "xmls", // Só busca quando appliedFilters está definido
     staleTime: 1000 * 30, // 30 segundos - dados considerados frescos
     queryFn: async () => {
       if (!currentCompanyId || !appliedFilters) {
@@ -147,9 +185,83 @@ export default function Xmls() {
   // A API já faz todos os filtros, não precisa filtrar localmente
   const filteredXmls = xmls;
 
+  const { data: xmlEvents = [], isLoading: loadingEvents, isError: isErrorEvents, refetch: refetchEvents } = useQuery<XmlEvent[]>({
+    queryKey: ["/api/xml-events/company", currentCompanyId],
+    enabled: !!currentCompanyId && !!appliedFilters && appliedFilters.view === "events",
+    queryFn: async () => {
+      if (!currentCompanyId) {
+        throw new Error("Company ID não definido");
+      }
+
+      const res = await fetch(`/api/xml-events/company/${currentCompanyId}`, {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Erro ao carregar eventos");
+      }
+
+      return res.json();
+    },
+  });
+
   // Paginação local
-  const totalPages = Math.ceil(filteredXmls.length / itemsPerPage);
+  const filteredEvents = xmlEvents.filter((event) => {
+    if (!appliedFilters) return false;
+
+    if (appliedFilters.eventTipo !== "all" && event.tipoEvento !== appliedFilters.eventTipo) {
+      return false;
+    }
+
+    if (appliedFilters.eventModelo !== "all" && event.modelo !== appliedFilters.eventModelo) {
+      return false;
+    }
+
+    if (appliedFilters.search) {
+      const query = appliedFilters.search.toLowerCase();
+      const matchesChave = event.chaveNFe?.includes(query);
+      const matchesProtocolo = event.protocolo?.toLowerCase().includes(query);
+      const matchesIntervalo = `${event.numeroInicial || ""}${event.numeroFinal || ""}`.includes(query);
+      if (!matchesChave && !matchesProtocolo && !matchesIntervalo) {
+        return false;
+      }
+    }
+
+    if (appliedFilters.dataInicio && event.dataEvento < appliedFilters.dataInicio) {
+      return false;
+    }
+    if (appliedFilters.dataFim && event.dataEvento > appliedFilters.dataFim) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const sortedEvents = [...filteredEvents].sort((a, b) => {
+    const aNumber = Number.parseInt(a.numeroInicial || a.numeroFinal || "", 10);
+    const bNumber = Number.parseInt(b.numeroInicial || b.numeroFinal || "", 10);
+    const aHasNumber = Number.isFinite(aNumber);
+    const bHasNumber = Number.isFinite(bNumber);
+
+    if (aHasNumber && bHasNumber && aNumber !== bNumber) {
+      return aNumber - bNumber;
+    }
+    if (aHasNumber !== bHasNumber) {
+      return aHasNumber ? -1 : 1;
+    }
+
+    return a.dataEvento.localeCompare(b.dataEvento);
+  });
+
+  const totalPages = Math.ceil(
+    (viewType === "xmls" ? filteredXmls.length : sortedEvents.length) / itemsPerPage
+  );
   const paginatedXmls = filteredXmls.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+  const paginatedEvents = sortedEvents.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
@@ -173,16 +285,21 @@ export default function Xmls() {
   };
 
   const handleFilter = () => {
-    setAppliedFilters({
+    const nextFilters = {
+      view: viewType,
       tipoDoc,
       categoria,
       statusValidacao,
       tipoEmitDest,
+      eventTipo,
+      eventModelo,
       search: searchTerm,
       dataInicio: dataInicial,
       dataFim: dataFinal,
-    });
+    };
+    setAppliedFilters(nextFilters);
     setCurrentPage(1); // Reset para primeira página ao filtrar
+    updateListLocation(nextFilters, 1, selectedXmlIds);
   };
 
   // Buscar empresa para obter dados
@@ -210,6 +327,9 @@ export default function Xmls() {
       newSelection.add(xmlId);
     }
     setSelectedXmlIds(newSelection);
+    if (appliedFilters) {
+      updateListLocation(appliedFilters, currentPage, newSelection);
+    }
   };
 
   // Selecionar/desselecionar todos (todos os registros do filtro, não apenas da página)
@@ -219,10 +339,18 @@ export default function Xmls() {
     
     if (allSelected) {
       // Desselecionar todos
-      setSelectedXmlIds(new Set());
+      const nextSelection = new Set<string>();
+      setSelectedXmlIds(nextSelection);
+      if (appliedFilters) {
+        updateListLocation(appliedFilters, currentPage, nextSelection);
+      }
     } else {
       // Selecionar todos os XMLs do filtro
-      setSelectedXmlIds(new Set(xmls.map((xml) => xml.id)));
+      const nextSelection = new Set(xmls.map((xml) => xml.id));
+      setSelectedXmlIds(nextSelection);
+      if (appliedFilters) {
+        updateListLocation(appliedFilters, currentPage, nextSelection);
+      }
     }
   };
 
@@ -329,6 +457,69 @@ export default function Xmls() {
     }
   };
 
+  const generateDeleteChallenge = () => ({
+    a: Math.floor(Math.random() * 9) + 1,
+    b: Math.floor(Math.random() * 9) + 1,
+  });
+
+  const resetDeleteDialog = () => {
+    setDeleteDialogOpen(false);
+    setXmlToDelete(null);
+    setDeleteAnswer("");
+    setDeleteChallenge(null);
+  };
+
+  const handleOpenDeleteDialog = (xml: Xml) => {
+    setXmlToDelete(xml);
+    setDeleteAnswer("");
+    setDeleteChallenge(generateDeleteChallenge());
+    setDeleteDialogOpen(true);
+  };
+
+  const deleteMutation = useMutation({
+    mutationFn: async (xmlId: string) => {
+      if (!currentCompanyId) {
+        throw new Error("Empresa não selecionada");
+      }
+
+      const res = await fetch(`/api/xmls/${xmlId}?companyId=${currentCompanyId}`, {
+        method: "DELETE",
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || "Erro ao excluir documento fiscal");
+      }
+
+      return res.json();
+    },
+    onSuccess: (_data, xmlId) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/xmls"] });
+      setSelectedXmlIds((prev) => {
+        const next = new Set(prev);
+        next.delete(xmlId);
+        if (appliedFilters) {
+          updateListLocation(appliedFilters, currentPage, next);
+        }
+        return next;
+      });
+      resetDeleteDialog();
+      toast({
+        title: "Documento excluído",
+        description: "O documento foi removido da listagem com segurança.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Erro ao excluir documento",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleDownloadXml = async (chave: string) => {
     try {
       const res = await fetch(`/api/xmls/${chave}/download`, {
@@ -403,6 +594,98 @@ export default function Xmls() {
     }
   };
 
+  const isDeleteAnswerValid =
+    !!deleteChallenge && Number(deleteAnswer) === deleteChallenge.a + deleteChallenge.b;
+
+  const updateListLocation = (
+    filters: {
+      view: "xmls" | "events";
+      tipoDoc: string;
+      categoria: string;
+      statusValidacao: string;
+      tipoEmitDest: string;
+      eventTipo: string;
+      eventModelo: string;
+      search: string;
+      dataInicio: string;
+      dataFim: string;
+    } | null,
+    page: number,
+    selection: Set<string>,
+  ) => {
+    if (!filters) return;
+    const params = new URLSearchParams();
+    params.set("view", filters.view);
+    params.set("tipoDoc", filters.tipoDoc);
+    params.set("categoria", filters.categoria);
+    params.set("statusValidacao", filters.statusValidacao);
+    params.set("tipoEmitDest", filters.tipoEmitDest);
+    params.set("eventTipo", filters.eventTipo);
+    params.set("eventModelo", filters.eventModelo);
+    params.set("search", filters.search);
+    params.set("dataInicio", filters.dataInicio);
+    params.set("dataFim", filters.dataFim);
+    params.set("page", String(page));
+    if (selection.size > 0) {
+      params.set("selected", Array.from(selection).join(","));
+    }
+    setLocation(`/xmls?${params.toString()}`);
+  };
+
+  const goToPage = (nextPage: number) => {
+    setCurrentPage(nextPage);
+    if (appliedFilters) {
+      updateListLocation(appliedFilters, nextPage, selectedXmlIds);
+    }
+  };
+
+  useEffect(() => {
+    const search = location.includes("?") ? location.split("?")[1] : "";
+    if (!search) {
+      const defaults = getDefaultDateRange();
+      setDataInicial(defaults.dataInicial);
+      setDataFinal(defaults.dataFinal);
+      setAppliedFilters(null);
+      setCurrentPage(1);
+      setSelectedXmlIds(new Set());
+      return;
+    }
+
+    const params = new URLSearchParams(search);
+    const defaults = getDefaultDateRange();
+    const parsedPage = Number(params.get("page") || "1");
+    const parsedSelection = params.get("selected")
+      ? new Set(params.get("selected")!.split(",").filter(Boolean))
+      : new Set<string>();
+    const nextView = params.get("view") === "events" ? "events" : "xmls";
+    const nextFilters = {
+      view: nextView,
+      tipoDoc: params.get("tipoDoc") || "all",
+      categoria: params.get("categoria") || "all",
+      statusValidacao: params.get("statusValidacao") || "all",
+      tipoEmitDest: params.get("tipoEmitDest") || "all",
+      eventTipo: params.get("eventTipo") || "all",
+      eventModelo: params.get("eventModelo") || "all",
+      search: params.get("search") || "",
+      dataInicio: params.get("dataInicio") || defaults.dataInicial,
+      dataFim: params.get("dataFim") || defaults.dataFinal,
+    };
+
+    setViewType(nextFilters.view);
+    setTipoDoc(nextFilters.tipoDoc);
+    setCategoria(nextFilters.categoria);
+    setStatusValidacao(nextFilters.statusValidacao);
+    setTipoEmitDest(nextFilters.tipoEmitDest);
+    setEventTipo(nextFilters.eventTipo);
+    setEventModelo(nextFilters.eventModelo);
+    setSearchTerm(nextFilters.search);
+    setDataInicial(nextFilters.dataInicio);
+    setDataFinal(nextFilters.dataFim);
+    setAppliedFilters(nextFilters);
+    setCurrentPage(Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage);
+    setSelectedXmlIds(parsedSelection);
+  }, [location]);
+
   if (!currentCompanyId) {
     return (
       <DashboardLayout>
@@ -434,15 +717,17 @@ export default function Xmls() {
               Visualize e gerencie todos os XMLs processados
             </p>
           </div>
-          <Button 
-            data-testid="button-send-selected"
-            variant="outline"
-            onClick={handleOpenSendSelectedDialog}
-            disabled={selectedXmlIds.size === 0}
-          >
-            <Send className="w-4 h-4 mr-2" />
-            Enviar Selecionados {selectedXmlIds.size > 0 && `(${selectedXmlIds.size})`}
-          </Button>
+          {viewType === "xmls" && (
+            <Button 
+              data-testid="button-send-selected"
+              variant="outline"
+              onClick={handleOpenSendSelectedDialog}
+              disabled={selectedXmlIds.size === 0}
+            >
+              <Send className="w-4 h-4 mr-2" />
+              Enviar Selecionados {selectedXmlIds.size > 0 && `(${selectedXmlIds.size})`}
+            </Button>
+          )}
         </div>
 
         {/* Filters */}
@@ -453,13 +738,33 @@ export default function Xmls() {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
-                    placeholder="Buscar por chave ou destinatário..."
+                    placeholder={viewType === "xmls" ? "Buscar por chave ou destinatário..." : "Buscar por chave, protocolo ou intervalo..."}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10 h-11"
                     data-testid="input-search"
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm">Tipo</Label>
+                <Select value={viewType} onValueChange={(value) => {
+                  const nextView = value === "events" ? "events" : "xmls";
+                  setViewType(nextView);
+                  setSelectedXmlIds(new Set());
+                  setCurrentPage(1);
+                  if (appliedFilters) {
+                    updateListLocation({ ...appliedFilters, view: nextView }, 1, new Set());
+                  }
+                }}>
+                  <SelectTrigger className="w-[180px] h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="xmls">XMLs da Nota</SelectItem>
+                    <SelectItem value="events">Eventos</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label className="text-sm">Tipo Doc</Label>
@@ -487,32 +792,66 @@ export default function Xmls() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label className="text-sm">Status</Label>
-                <Select value={statusValidacao} onValueChange={setStatusValidacao}>
-                  <SelectTrigger className="w-[180px] h-11">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos</SelectItem>
-                    <SelectItem value="valido">Válidos</SelectItem>
-                    <SelectItem value="invalido">Inválidos</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm">Tipo Emit/Dest</Label>
-                <Select value={tipoEmitDest} onValueChange={setTipoEmitDest}>
-                  <SelectTrigger className="w-[180px] h-11">
-                    <SelectValue placeholder="Tipo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos</SelectItem>
-                    <SelectItem value="emit">Emitidas</SelectItem>
-                    <SelectItem value="dest">Recebidas</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {viewType === "xmls" ? (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Status</Label>
+                    <Select value={statusValidacao} onValueChange={setStatusValidacao}>
+                      <SelectTrigger className="w-[180px] h-11">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="valido">Válidos</SelectItem>
+                        <SelectItem value="invalido">Inválidos</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Tipo Emit/Dest</Label>
+                    <Select value={tipoEmitDest} onValueChange={setTipoEmitDest}>
+                      <SelectTrigger className="w-[180px] h-11">
+                        <SelectValue placeholder="Tipo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="emit">Emitidas</SelectItem>
+                        <SelectItem value="dest">Recebidas</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Tipo Evento</Label>
+                    <Select value={eventTipo} onValueChange={setEventTipo}>
+                      <SelectTrigger className="w-[180px] h-11">
+                        <SelectValue placeholder="Tipo do Evento" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="cancelamento">Cancelamento</SelectItem>
+                        <SelectItem value="carta_correcao">Carta de Correção</SelectItem>
+                        <SelectItem value="inutilizacao">Inutilização</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Modelo</Label>
+                    <Select value={eventModelo} onValueChange={setEventModelo}>
+                      <SelectTrigger className="w-[180px] h-11">
+                        <SelectValue placeholder="Modelo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="55">NFe</SelectItem>
+                        <SelectItem value="65">NFCe</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
             </div>
             {/* Período */}
             <div className="flex flex-wrap items-end gap-4 mt-4 pt-4 border-t">
@@ -564,7 +903,8 @@ export default function Xmls() {
         {/* XMLs Table */}
         <Card>
           <CardContent className="p-0">
-            {isLoading ? (
+            {viewType === "xmls" ? (
+              isLoading ? (
               <div className="flex items-center justify-center p-12">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
                 <p className="ml-3 text-muted-foreground">Carregando XMLs...</p>
@@ -713,7 +1053,10 @@ export default function Xmls() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => setLocation(`/xmls/${xml.id}`)}
+                                onClick={() => {
+                                  const search = location.includes("?") ? location.slice(location.indexOf("?")) : "";
+                                  setLocation(`/xmls/${xml.id}${search}`);
+                                }}
                                 data-testid={`button-view-${xml.id}`}
                                 title="Ver detalhes"
                               >
@@ -738,6 +1081,16 @@ export default function Xmls() {
                               >
                                 <Download className="w-4 h-4" />
                               </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleOpenDeleteDialog(xml)}
+                                data-testid={`button-delete-${xml.id}`}
+                                title="Excluir documento"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
                             </div>
                           </td>
                         </tr>
@@ -757,7 +1110,7 @@ export default function Xmls() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      onClick={() => goToPage(Math.max(1, currentPage - 1))}
                       disabled={currentPage === 1}
                       data-testid="button-prev-page"
                     >
@@ -774,7 +1127,7 @@ export default function Xmls() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(currentPage + 1)}
+                      onClick={() => goToPage(currentPage + 1)}
                       disabled={currentPage >= totalPages}
                       data-testid="button-next-page"
                     >
@@ -783,6 +1136,130 @@ export default function Xmls() {
                   </div>
                 </div>
               </>
+            )) : (
+              loadingEvents ? (
+                <div className="flex items-center justify-center p-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  <p className="ml-3 text-muted-foreground">Carregando eventos...</p>
+                </div>
+              ) : isErrorEvents ? (
+                <div className="flex items-center justify-center p-12">
+                  <AlertCircle className="w-8 h-8 text-destructive" />
+                  <p className="ml-3 text-destructive">Erro ao carregar eventos</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-4"
+                    onClick={() => refetchEvents()}
+                  >
+                    Tentar novamente
+                  </Button>
+                </div>
+              ) : paginatedEvents.length === 0 ? (
+                <div className="flex flex-col items-center justify-center p-12 text-center">
+                  <FileText className="w-12 h-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold">Nenhum evento encontrado</h3>
+                  <p className="text-muted-foreground mt-1">
+                    {searchTerm || eventTipo !== "all" || eventModelo !== "all"
+                      ? "Tente ajustar os filtros ou fazer uma nova busca"
+                      : "Faça upload de XMLs de eventos para começar"}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b bg-muted/50">
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Tipo Evento
+                          </th>
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Modelo
+                          </th>
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Chave/Intervalo
+                          </th>
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Data
+                          </th>
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Protocolo
+                          </th>
+                          <th className="px-6 py-4 text-left text-sm font-semibold">
+                            Observação
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paginatedEvents.map((event) => (
+                          <tr key={event.id} className="border-b hover-elevate">
+                            <td className="px-6 py-4">
+                              <Badge variant="outline" className="capitalize">
+                                {event.tipoEvento.replace("_", " ")}
+                              </Badge>
+                            </td>
+                            <td className="px-6 py-4 text-sm">
+                              {event.modelo === "55" ? "NFe" : event.modelo === "65" ? "NFCe" : "—"}
+                            </td>
+                            <td className="px-6 py-4 text-sm font-mono text-muted-foreground">
+                              {event.chaveNFe
+                                ? event.chaveNFe.substring(0, 4) + "..." + event.chaveNFe.substring(event.chaveNFe.length - 4)
+                                : event.numeroInicial && event.numeroFinal
+                                  ? `${event.numeroInicial} - ${event.numeroFinal}`
+                                  : "—"}
+                            </td>
+                            <td className="px-6 py-4 text-sm">
+                              <div className="font-medium">{formatDateBR(event.dataEvento)}</div>
+                              <div className="text-muted-foreground">{event.horaEvento || "—"}</div>
+                            </td>
+                            <td className="px-6 py-4 text-sm">
+                              {event.protocolo || "—"}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-muted-foreground">
+                              {event.justificativa || event.correcao || "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  <div className="flex items-center justify-between px-6 py-4 border-t">
+                    <div className="text-sm text-muted-foreground">
+                      Mostrando {(currentPage - 1) * itemsPerPage + 1} a{" "}
+                      {Math.min(currentPage * itemsPerPage, sortedEvents.length)} de{" "}
+                      {sortedEvents.length} resultados
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => goToPage(Math.max(1, currentPage - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-w-10"
+                      >
+                        {currentPage}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => goToPage(currentPage + 1)}
+                        disabled={currentPage >= totalPages}
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )
             )}
           </CardContent>
         </Card>
@@ -859,6 +1336,87 @@ export default function Xmls() {
                   <Send className="w-4 h-4 mr-2" />
                   Enviar
                 </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Exclusão de XML */}
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            resetDeleteDialog();
+          } else {
+            setDeleteDialogOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              Excluir Documento Fiscal
+            </DialogTitle>
+            <DialogDescription>
+              Tem certeza que deseja excluir este documento? Esta ação não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="text-sm">
+              Item:{" "}
+              <span className="font-semibold">
+                {xmlToDelete
+                  ? `${xmlToDelete.tipoDoc} ${xmlToDelete.numeroNota || formatChave(xmlToDelete.chave)}`
+                  : "—"}
+              </span>
+            </div>
+            <Alert variant="destructive" className="bg-destructive/10 border-destructive/20 text-destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                Esta ação é irreversível. O documento será removido da listagem e permanecerá
+                registrado apenas para auditoria.
+              </AlertDescription>
+            </Alert>
+            <div className="space-y-2">
+              <Label htmlFor="delete-confirmation" className="text-sm">
+                Para confirmar, resolva:{" "}
+                {deleteChallenge ? `${deleteChallenge.a} + ${deleteChallenge.b} = ?` : "—"}
+              </Label>
+              <Input
+                id="delete-confirmation"
+                type="number"
+                value={deleteAnswer}
+                onChange={(e) => setDeleteAnswer(e.target.value)}
+                placeholder="Digite o resultado"
+                className="h-11"
+              />
+              <p className="text-xs text-muted-foreground">
+                Essa verificação ajuda a evitar exclusões acidentais.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={resetDeleteDialog}
+              disabled={deleteMutation.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => xmlToDelete && deleteMutation.mutate(xmlToDelete.id)}
+              className="bg-destructive hover:bg-destructive/90"
+              disabled={!xmlToDelete || !isDeleteAnswerValid || deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Excluindo...
+                </>
+              ) : (
+                "Sim, Excluir"
               )}
             </Button>
           </DialogFooter>

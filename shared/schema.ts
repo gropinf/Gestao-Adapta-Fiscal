@@ -106,6 +106,7 @@ export const xmls = pgTable("xmls", {
   dataCancelamento: text("data_cancelamento"), // Data do cancelamento (YYYY-MM-DD) - preenchido ao receber evento de cancelamento
   filepath: text("filepath").notNull(), // Caminho do arquivo no storage
   danfePath: text("danfe_path"), // Caminho do PDF DANFE gerado
+  deletedAt: timestamp("deleted_at"), // Soft delete
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -173,6 +174,21 @@ export const emailMonitors = pgTable("email_monitors", {
   lastCheckedAt: timestamp("last_checked_at"),
   lastEmailId: text("last_email_id"), // ID do último email processado (para evitar duplicatas)
   checkIntervalMinutes: integer("check_interval_minutes").default(15), // Intervalo de verificação em minutos
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Email Global Settings table - Configuração SMTP global do sistema
+export const emailGlobalSettings = pgTable("email_global_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  host: text("host").notNull(),
+  port: integer("port").notNull(),
+  user: text("user").notNull(),
+  password: text("password").notNull(),
+  fromEmail: text("from_email").notNull(),
+  fromName: text("from_name").notNull(),
+  useSsl: boolean("use_ssl").default(false).notNull(),
+  useTls: boolean("use_tls").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -383,6 +399,7 @@ export const insertAccountantSchema = createInsertSchema(accountants).omit({
 export const insertXmlSchema = createInsertSchema(xmls).omit({
   id: true,
   createdAt: true,
+  deletedAt: true,
 });
 
 export const insertXmlEventSchema = createInsertSchema(xmlEvents).omit({
@@ -401,6 +418,12 @@ export const insertAlertSchema = createInsertSchema(alerts).omit({
 });
 
 export const insertEmailMonitorSchema = createInsertSchema(emailMonitors).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEmailGlobalSettingsSchema = createInsertSchema(emailGlobalSettings).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
@@ -456,6 +479,9 @@ export type InsertAlert = z.infer<typeof insertAlertSchema>;
 
 export type EmailMonitor = typeof emailMonitors.$inferSelect;
 export type InsertEmailMonitor = z.infer<typeof insertEmailMonitorSchema>;
+
+export type EmailGlobalSettings = typeof emailGlobalSettings.$inferSelect;
+export type InsertEmailGlobalSettings = z.infer<typeof insertEmailGlobalSettingsSchema>;
 
 export type AccessRequest = typeof accessRequests.$inferSelect;
 export type InsertAccessRequest = z.infer<typeof insertAccessRequestSchema>;
