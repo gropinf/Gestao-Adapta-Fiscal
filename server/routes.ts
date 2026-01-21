@@ -116,6 +116,36 @@ const upload = multer({
   },
 });
 
+const uploadFilesMiddleware = (req: AuthRequest, res: any, next: any) => {
+  upload.array("files", 100)(req, res, (err: any) => {
+    if (!err) return next();
+
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: "Arquivo excede o limite de tamanho",
+          message: `O limite por arquivo é de ${MAX_UPLOAD_FILE_MB}MB.`,
+        });
+      }
+      if (err.code === "LIMIT_FILE_COUNT") {
+        return res.status(400).json({
+          error: "Limite de arquivos excedido",
+          message: "Envie no máximo 100 arquivos por vez.",
+        });
+      }
+      return res.status(400).json({
+        error: "Erro no upload",
+        message: err.message,
+      });
+    }
+
+    return res.status(400).json({
+      error: "Erro ao processar upload",
+      message: err instanceof Error ? err.message : "Arquivo inválido",
+    });
+  });
+};
+
 function isXmlFilename(name: string): boolean {
   return name.toLowerCase().endsWith(".xml");
 }
@@ -4100,7 +4130,7 @@ ${company.razaoSocial}
   });
 
   // Upload XMLs Route - Batch processing
-  app.post("/api/upload", authMiddleware, upload.array("files", 100), async (req: AuthRequest, res) => {
+  app.post("/api/upload", authMiddleware, uploadFilesMiddleware, async (req: AuthRequest, res) => {
     let cleanupPaths: string[] = [];
     try {
       const files = req.files as Express.Multer.File[];
