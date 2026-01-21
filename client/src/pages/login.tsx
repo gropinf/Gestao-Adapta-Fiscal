@@ -61,7 +61,10 @@ export default function Login() {
               <div className="w-12 h-12 rounded-lg bg-primary flex items-center justify-center">
                 <FileText className="w-7 h-7 text-primary-foreground" />
               </div>
-              <h1 className="text-3xl font-bold">Adapta Fiscal</h1>
+              <div className="flex flex-col items-start">
+                <h1 className="text-3xl font-bold">Adapta Fiscal</h1>
+                <span className="text-xs text-muted-foreground mt-1">Versão 260121a</span>
+              </div>
             </div>
             <h2 className="text-2xl font-semibold">Bem-vindo de volta</h2>
             <p className="text-muted-foreground">
