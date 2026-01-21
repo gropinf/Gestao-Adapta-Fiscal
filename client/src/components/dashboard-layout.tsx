@@ -139,7 +139,9 @@ function AppSidebar() {
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg">Adapta Fiscal</span>
-              <span className="text-xs text-muted-foreground">v1.2</span>
+              <span className="text-xs text-muted-foreground">
+                {import.meta.env.VITE_APP_VERSION || "—"}
+              </span>
             </div>
           </div>
           <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>

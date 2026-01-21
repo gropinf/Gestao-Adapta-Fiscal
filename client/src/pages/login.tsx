@@ -63,7 +63,9 @@ export default function Login() {
               </div>
               <div className="flex flex-col items-start">
                 <h1 className="text-3xl font-bold">Adapta Fiscal</h1>
-                <span className="text-xs text-muted-foreground mt-1">Versão 260121a</span>
+                <span className="text-xs text-muted-foreground mt-1">
+                  Versão {import.meta.env.VITE_APP_VERSION || "—"}
+                </span>
               </div>
             </div>
             <h2 className="text-2xl font-semibold">Bem-vindo de volta</h2>
