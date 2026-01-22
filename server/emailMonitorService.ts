@@ -2,8 +2,8 @@ import imapSimple from 'imap-simple';
 import { simpleParser } from 'mailparser';
 import { storage } from './storage';
 import { parseXmlContent, isValidNFeXml } from './xmlParser';
-import { saveToValidated } from './fileStorage';
-import { saveXmlToContabo } from './xmlStorageService';
+import { isValidEventXml, parseEventOrInutilizacao, type ParsedEventoData, type ParsedInutilizacaoData } from './xmlEventParser';
+import { saveXmlToContabo, saveEventXmlToContabo } from './xmlStorageService';
 import { getOrCreateCompanyByCnpj } from './utils/companyAutoCreate';
 import type { EmailMonitor } from '@shared/schema';
 
@@ -19,7 +19,7 @@ interface CheckResult {
 }
 
 /**
- * Verifica emails de um monitor específico e processa XMLs encontrados
+ * Verifica emails de um monitor específico e processa XMLs encontrados (NFe e eventos)
  */
 export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, triggeredBy: string = 'manual'): Promise<CheckResult> {
   const startTime = Date.now();
@@ -146,14 +146,122 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           try {
             const xmlContent = attachment.content.toString('utf-8');
             
-            // Validar se é XML de NFe/NFCe
-            if (!isValidNFeXml(xmlContent)) {
-              console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe`);
-              result.errors.push(`${filename}: Não é XML de NFe/NFCe`);
+            const isNfeXml = isValidNFeXml(xmlContent);
+            const isEventXml = !isNfeXml && isValidEventXml(xmlContent);
+            
+            if (!isNfeXml && !isEventXml) {
+              console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe ou Evento`);
+              result.errors.push(`${filename}: Não é XML de NFe/NFCe ou Evento`);
               continue;
             }
 
-            // Parsear XML
+            if (isEventXml) {
+              const parsedEvent = await parseEventOrInutilizacao(xmlContent);
+              const eventCnpj = parsedEvent.cnpj;
+              const company = await storage.getCompanyByCnpj(eventCnpj);
+              if (!company) {
+                result.errors.push(`${filename}: Empresa com CNPJ ${eventCnpj} não encontrada`);
+                continue;
+              }
+
+              if (parsedEvent.tipo === "evento") {
+                const eventoData = parsedEvent as ParsedEventoData;
+                const duplicate = await storage.getDuplicateXmlEventForEvento({
+                  companyId: company.id,
+                  chaveNFe: eventoData.chaveNFe,
+                  tipoEvento: eventoData.tipoEvento,
+                  numeroSequencia: eventoData.numeroSequencia ?? null,
+                  protocolo: eventoData.protocolo ?? null,
+                  dataEvento: eventoData.dataEvento ?? null,
+                  horaEvento: eventoData.horaEvento ?? null,
+                });
+                if (duplicate) {
+                  result.xmlsDuplicated++;
+                  continue;
+                }
+
+                const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+                if (!saveResult.success) {
+                  result.errors.push(`${filename}: Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
+                  continue;
+                }
+
+                const xml = await storage.getXmlByChave(eventoData.chaveNFe);
+
+                await storage.createXmlEvent({
+                  companyId: company.id,
+                  chaveNFe: eventoData.chaveNFe,
+                  xmlId: xml?.id || null,
+                  tipoEvento: eventoData.tipoEvento,
+                  codigoEvento: eventoData.codigoEvento,
+                  dataEvento: eventoData.dataEvento,
+                  horaEvento: eventoData.horaEvento,
+                  numeroSequencia: eventoData.numeroSequencia,
+                  protocolo: eventoData.protocolo,
+                  justificativa: eventoData.justificativa || null,
+                  correcao: eventoData.correcao || null,
+                  ano: null,
+                  serie: null,
+                  numeroInicial: null,
+                  numeroFinal: null,
+                  cnpj: eventoData.cnpj,
+                  modelo: eventoData.modelo,
+                  filepath: saveResult.filepath || "",
+                });
+
+                if (eventoData.tipoEvento === "cancelamento" && xml) {
+                  await storage.updateXml(xml.id, { dataCancelamento: eventoData.dataEvento });
+                }
+              } else {
+                const inutData = parsedEvent as ParsedInutilizacaoData;
+                const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
+                  companyId: company.id,
+                  modelo: inutData.modelo,
+                  serie: inutData.serie,
+                  numeroInicial: inutData.numeroInicial,
+                  numeroFinal: inutData.numeroFinal,
+                  protocolo: inutData.protocolo ?? null,
+                  dataEvento: inutData.dataEvento ?? null,
+                  horaEvento: inutData.horaEvento ?? null,
+                });
+                if (duplicate) {
+                  result.xmlsDuplicated++;
+                  continue;
+                }
+
+                const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+                if (!saveResult.success) {
+                  result.errors.push(`${filename}: Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
+                  continue;
+                }
+
+                await storage.createXmlEvent({
+                  companyId: company.id,
+                  chaveNFe: null,
+                  xmlId: null,
+                  tipoEvento: "inutilizacao",
+                  codigoEvento: null,
+                  dataEvento: inutData.dataEvento,
+                  horaEvento: inutData.horaEvento,
+                  numeroSequencia: null,
+                  protocolo: inutData.protocolo,
+                  justificativa: inutData.justificativa,
+                  correcao: null,
+                  ano: inutData.ano,
+                  serie: inutData.serie,
+                  numeroInicial: inutData.numeroInicial,
+                  numeroFinal: inutData.numeroFinal,
+                  cnpj: inutData.cnpj,
+                  modelo: inutData.modelo,
+                  filepath: saveResult.filepath || "",
+                });
+              }
+
+              result.xmlsProcessed++;
+              continue;
+            }
+
+            // Parsear XML de NFe/NFCe
             const parsedXml = await parseXmlContent(xmlContent);
             
             // Verificar duplicata pela chave
@@ -165,7 +273,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             }
 
             // Buscar ou criar empresa pelo CNPJ do emitente
-            const { company: emitterCompany } = await getOrCreateCompanyByCnpj(
+            await getOrCreateCompanyByCnpj(
               parsedXml.cnpjEmitente,
               parsedXml,
               userId
@@ -306,6 +414,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
  */
 export async function checkAllActiveMonitors(userId: string, triggeredBy: string = 'cron'): Promise<{
   totalMonitors: number;
+  executed: number;
+  skipped: number;
   successful: number;
   failed: number;
   results: CheckResult[];
@@ -319,6 +429,8 @@ export async function checkAllActiveMonitors(userId: string, triggeredBy: string
   const results: CheckResult[] = [];
   let successful = 0;
   let failed = 0;
+  let skipped = 0;
+  let executed = 0;
 
   for (const monitor of activeMonitors) {
     // Verificar se já passou o intervalo configurado
@@ -329,12 +441,14 @@ export async function checkAllActiveMonitors(userId: string, triggeredBy: string
       
       if (minutesSinceCheck < monitor.checkIntervalMinutes) {
         console.log(`[IMAP Monitor] ⏭️ Monitor ${monitor.email} ainda não precisa verificar (última: ${minutesSinceCheck.toFixed(1)}min atrás)`);
+        skipped++;
         continue;
       }
     }
 
     const result = await checkEmailMonitor(monitor, userId, triggeredBy);
     results.push(result);
+    executed++;
     
     if (result.success) {
       successful++;
@@ -347,6 +461,8 @@ export async function checkAllActiveMonitors(userId: string, triggeredBy: string
   
   return {
     totalMonitors: activeMonitors.length,
+    executed,
+    skipped,
     successful,
     failed,
     results,

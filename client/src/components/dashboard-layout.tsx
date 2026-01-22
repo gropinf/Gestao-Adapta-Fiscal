@@ -100,6 +100,12 @@ const menuItems = [
     icon: Mail,
   },
   {
+    title: "Histórico Agendamentos",
+    url: "/configuracoes/email-monitor-runs",
+    icon: Mail,
+    adminOnly: true,
+  },
+  {
     title: "Enviar XMLs por Email",
     url: "/envio-xml-email",
     icon: Send,

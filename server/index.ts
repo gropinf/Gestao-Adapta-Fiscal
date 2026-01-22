@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { initializeStorageDirectories } from "./fileStorage";
+import { storage } from "./storage";
+import { checkAllActiveMonitors } from "./emailMonitorService";
 
 const app = express();
 
@@ -54,6 +56,41 @@ app.use((req, res, next) => {
   log("Sistema de storage inicializado ✅");
 
   const server = await registerRoutes(app);
+  let isEmailMonitorRunning = false;
+
+  const runEmailMonitorCycle = async () => {
+    if (isEmailMonitorRunning) {
+      log("[IMAP Monitor] Execução já em andamento, ignorando.");
+      return;
+    }
+
+    isEmailMonitorRunning = true;
+    try {
+      const admins = await storage.getUsersByRole("admin");
+      const adminUserId = admins[0]?.id;
+      if (!adminUserId) {
+        log("[IMAP Monitor] Nenhum admin encontrado para executar monitoramento.");
+        return;
+      }
+
+      const result = await checkAllActiveMonitors(adminUserId, "cron");
+      await storage.logAction({
+        userId: adminUserId,
+        action: "email_monitor_schedule_run",
+        details: JSON.stringify({
+          totalMonitors: result.totalMonitors,
+          executed: result.executed,
+          skipped: result.skipped,
+          successful: result.successful,
+          failed: result.failed,
+        }),
+      });
+    } catch (error) {
+      console.error("[IMAP Monitor] Erro na execução automática:", error);
+    } finally {
+      isEmailMonitorRunning = false;
+    }
+  };
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err?.status || err?.statusCode || 500;
@@ -85,5 +122,15 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+
+    const intervalMinutes = Number(
+      process.env.EMAIL_MONITOR_SCHEDULE_MINUTES ||
+      process.env.EMAIL_MONITOR_INTERVAL_MINUTES ||
+      5
+    );
+    const intervalMs = Math.max(intervalMinutes, 5) * 60 * 1000;
+    log(`[IMAP Monitor] Agendado para executar a cada ${intervalMinutes} minutos.`);
+    setTimeout(runEmailMonitorCycle, 60 * 1000);
+    setInterval(runEmailMonitorCycle, intervalMs);
   });
 })();

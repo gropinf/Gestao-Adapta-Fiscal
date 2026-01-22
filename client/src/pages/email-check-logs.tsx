@@ -21,11 +21,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Loader2, Mail, CheckCircle2, XCircle, Copy, Check } from "lucide-react";
+import { Loader2, Mail, CheckCircle2, XCircle, Copy, Check, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface EmailCheckLog {
   id: string;
@@ -61,6 +68,7 @@ export default function EmailCheckLogs() {
   const [filterDateFrom, setFilterDateFrom] = useState<string>("");
   const [filterDateTo, setFilterDateTo] = useState<string>("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [selectedLog, setSelectedLog] = useState<EmailCheckLog | null>(null);
 
   // Fetch email monitors for filter (apenas admin - funcionalidade global)
   const { data: monitors = [] } = useQuery<EmailMonitor[]>({
@@ -399,8 +407,21 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                         </TableCell>
                         <TableCell>
                           {log.errorMessage ? (
-                            <div className="max-w-[200px] truncate text-xs text-red-600" title={log.errorMessage}>
-                              {log.errorMessage}
+                            <div className="flex items-center gap-2 max-w-[220px]">
+                              <span className="truncate text-xs text-red-600" title={log.errorMessage}>
+                                {log.errorMessage}
+                              </span>
+                              {log.errorDetails && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => setSelectedLog(log)}
+                                  className="h-6 w-6 text-red-600"
+                                  aria-label="Ver detalhes do erro"
+                                >
+                                  <Info className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">-</span>
@@ -435,6 +456,36 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
           </CardContent>
         </Card>
       </div>
+      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Detalhes do Erro</DialogTitle>
+            <DialogDescription>
+              {selectedLog?.emailAddress} • {selectedLog?.companyName || "N/A"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <div className="space-y-1">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">Mensagem</span>
+              <div className="rounded-md border bg-muted/40 p-3 text-red-700">
+                {selectedLog?.errorMessage || "Sem mensagem de erro"}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">Detalhes técnicos</span>
+              <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap">
+                {selectedLog?.errorDetails || "Sem detalhes técnicos"}
+              </pre>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
+              <span>Emails verificados: {selectedLog?.emailsChecked ?? 0}</span>
+              <span>XMLs encontrados: {selectedLog?.xmlsFound ?? 0}</span>
+              <span>XMLs processados: {selectedLog?.xmlsProcessed ?? 0}</span>
+              <span>XMLs duplicados: {selectedLog?.xmlsDuplicated ?? 0}</span>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

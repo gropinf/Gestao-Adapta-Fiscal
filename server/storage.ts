@@ -43,7 +43,7 @@ import {
   type InsertEmailCheckLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, like, or, gte, lte, sql, isNull } from "drizzle-orm";
+import { eq, and, desc, like, or, gte, lte, sql, isNull, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -123,6 +123,19 @@ export interface IStorage {
   // Actions (Audit)
   logAction(action: InsertAction): Promise<Action>;
   getUserActions(userId: string): Promise<Action[]>;
+  getActionsByTypesWithUser(
+    actionTypes: string[],
+    dateFrom?: string,
+    dateTo?: string
+  ): Promise<Array<{
+    id: string;
+    action: string;
+    details: string | null;
+    createdAt: Date;
+    userId: string;
+    userEmail: string | null;
+    userName: string | null;
+  }>>;
   
   // Alerts
   createAlert(alert: InsertAlert): Promise<Alert>;
@@ -598,6 +611,40 @@ export class DatabaseStorage implements IStorage {
 
   async getUserActions(userId: string): Promise<Action[]> {
     return db.select().from(actions).where(eq(actions.userId, userId)).orderBy(desc(actions.createdAt));
+  }
+
+  async getActionsByTypesWithUser(
+    actionTypes: string[],
+    dateFrom?: string,
+    dateTo?: string
+  ) {
+    const conditions = [inArray(actions.action, actionTypes)];
+
+    if (dateFrom) {
+      conditions.push(gte(actions.createdAt, new Date(dateFrom)));
+    }
+    if (dateTo) {
+      const endDate = new Date(dateTo);
+      endDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(actions.createdAt, endDate));
+    }
+
+    const rows = await db
+      .select({
+        id: actions.id,
+        action: actions.action,
+        details: actions.details,
+        createdAt: actions.createdAt,
+        userId: actions.userId,
+        userEmail: users.email,
+        userName: users.name,
+      })
+      .from(actions)
+      .leftJoin(users, eq(actions.userId, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(actions.createdAt));
+
+    return rows;
   }
 
   // Alerts

@@ -64,6 +64,7 @@ export function EmailMonitorList() {
   const [selectedMonitor, setSelectedMonitor] = useState<EmailMonitor | null>(null);
   const [isTesting, setIsTesting] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState<string | null>(null);
+  const [isCheckingAll, setIsCheckingAll] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
 
@@ -303,6 +304,41 @@ export function EmailMonitorList() {
     }
   };
 
+  const handleCheckAllNow = async () => {
+    setIsCheckingAll(true);
+    try {
+      const res = await fetch(`/api/email-monitors/run-now`, {
+        method: "POST",
+        headers: getAuthHeader(),
+      });
+      const result = await res.json();
+
+      if (res.ok) {
+        const { data } = result;
+        toast({
+          title: "✅ Verificação geral concluída!",
+          description: `Executados: ${data.executed}, pulados: ${data.skipped}, sucesso: ${data.successful}, falhas: ${data.failed}`,
+          duration: 6000,
+        });
+        queryClient.invalidateQueries({ queryKey: ["email-monitors"] });
+      } else {
+        toast({
+          title: "Erro na verificação geral",
+          description: result.error || result.message || "Falha ao verificar monitores",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: "Erro ao verificar monitores",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCheckingAll(false);
+    }
+  };
+
   const resetForm = () => {
     setFormData({
       email: "",
@@ -362,10 +398,29 @@ export function EmailMonitorList() {
             Configure contas de email para download automático de XMLs
           </p>
         </div>
-        <Button onClick={() => setIsAddDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Adicionar Email
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleCheckAllNow}
+            disabled={isCheckingAll}
+          >
+            {isCheckingAll ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Verificando...
+              </>
+            ) : (
+              <>
+                <PlayCircle className="mr-2 h-4 w-4" />
+                Rodar Agora
+              </>
+            )}
+          </Button>
+          <Button onClick={() => setIsAddDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Adicionar Email
+          </Button>
+        </div>
       </div>
 
       {/* Table */}

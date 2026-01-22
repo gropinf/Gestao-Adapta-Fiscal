@@ -15,7 +15,7 @@ import { fetchCNPJData, cleanCnpj } from "./receitaWS";
 import { getOrCreateCompanyByCnpj } from "./utils/companyAutoCreate";
 import { gerarDanfe, danfeExists, getDanfePath } from "./danfeService";
 import { testImapConnection } from "./emailTestService";
-import { checkEmailMonitor } from "./emailMonitorService";
+import { checkEmailMonitor, checkAllActiveMonitors } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
 import * as contaboStorage from "./contaboStorage";
 import {
@@ -2735,6 +2735,21 @@ ${company.razaoSocial}
   });
 
   // Email Monitors Routes - Monitoramento de Email (IMAP)
+  // Histórico de execuções do agendamento (admin only)
+  app.get("/api/email-monitor-runs", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { dateFrom, dateTo } = req.query;
+      const actions = await storage.getActionsByTypesWithUser(
+        ["email_monitor_schedule_run", "email_monitor_run_now"],
+        dateFrom as string | undefined,
+        dateTo as string | undefined
+      );
+      res.json(actions);
+    } catch (error) {
+      console.error("Get email monitor runs error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
   
   // Get email monitors by company
   // Get all email monitors (admin only - global functionality)
@@ -2887,6 +2902,34 @@ ${company.razaoSocial}
 
     } catch (error) {
       console.error("Update email monitor error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Run all active monitors now (admin only)
+  app.post("/api/email-monitors/run-now", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const result = await checkAllActiveMonitors(req.user!.id, "manual");
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "email_monitor_run_now",
+        details: JSON.stringify({
+          totalMonitors: result.totalMonitors,
+          executed: result.executed,
+          skipped: result.skipped,
+          successful: result.successful,
+          failed: result.failed,
+        }),
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        message: `Monitores executados: ${result.executed}, pulados: ${result.skipped}, sucesso: ${result.successful}, falhas: ${result.failed}`,
+      });
+    } catch (error) {
+      console.error("Run all monitors error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
