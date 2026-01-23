@@ -124,6 +124,20 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     if (messages.length === 0) {
       result.success = true;
       result.message = 'Nenhum email novo encontrado';
+
+      const duration = Date.now() - startTime;
+      await storage.updateEmailCheckLog(checkLog.id, {
+        status: 'success',
+        finishedAt: new Date(),
+        durationMs: duration,
+        emailsChecked: result.emailsChecked,
+        xmlsFound: result.xmlsFound,
+        xmlsProcessed: result.xmlsProcessed,
+        xmlsDuplicated: result.xmlsDuplicated,
+        errorMessage: null,
+        errorDetails: null,
+      });
+
       return result;
     }
 
