@@ -2735,6 +2735,38 @@ ${company.razaoSocial}
   });
 
   // Email Monitors Routes - Monitoramento de Email (IMAP)
+  // Scheduler toggle (admin only)
+  app.get("/api/email-monitor-schedule", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const settings = await storage.getEmailMonitorScheduleSettings();
+      res.json(settings || { enabled: true });
+    } catch (error) {
+      console.error("Get email monitor schedule error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.put("/api/email-monitor-schedule", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { enabled } = req.body;
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "Campo 'enabled' é obrigatório" });
+      }
+
+      const settings = await storage.upsertEmailMonitorScheduleSettings({ enabled });
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "email_monitor_schedule_toggle",
+        details: JSON.stringify({ enabled }),
+      });
+
+      res.json(settings);
+    } catch (error) {
+      console.error("Update email monitor schedule error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Histórico de execuções do agendamento (admin only)
   app.get("/api/email-monitor-runs", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {

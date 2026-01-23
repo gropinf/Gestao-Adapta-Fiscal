@@ -53,6 +53,10 @@ interface EmailMonitor {
   createdAt: string;
 }
 
+interface ScheduleSettings {
+  enabled: boolean;
+}
+
 // Monitor de email é funcionalidade global (não vinculada a empresa)
 export function EmailMonitorList() {
   const { toast } = useToast();
@@ -65,6 +69,7 @@ export function EmailMonitorList() {
   const [isTesting, setIsTesting] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState<string | null>(null);
   const [isCheckingAll, setIsCheckingAll] = useState(false);
+  const [isTogglingSchedule, setIsTogglingSchedule] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
 
@@ -87,6 +92,17 @@ export function EmailMonitorList() {
         headers: getAuthHeader(),
       });
       if (!res.ok) throw new Error("Erro ao carregar monitores de email");
+      return res.json();
+    },
+  });
+
+  const { data: scheduleSettings } = useQuery<ScheduleSettings>({
+    queryKey: ["email-monitor-schedule"],
+    queryFn: async () => {
+      const res = await fetch("/api/email-monitor-schedule", {
+        headers: getAuthHeader(),
+      });
+      if (!res.ok) throw new Error("Erro ao carregar configuração do agendamento");
       return res.json();
     },
   });
@@ -339,6 +355,46 @@ export function EmailMonitorList() {
     }
   };
 
+  const handleToggleSchedule = async (enabled: boolean) => {
+    setIsTogglingSchedule(true);
+    try {
+      const res = await fetch("/api/email-monitor-schedule", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeader(),
+        },
+        body: JSON.stringify({ enabled }),
+      });
+
+      const result = await res.json();
+
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["email-monitor-schedule"] });
+        toast({
+          title: enabled ? "Agendamento ativado" : "Agendamento desativado",
+          description: enabled
+            ? "O monitoramento automático foi reativado."
+            : "O monitoramento automático foi pausado.",
+        });
+      } else {
+        toast({
+          title: "Erro ao atualizar agendamento",
+          description: result.error || "Falha ao atualizar configuração",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: "Erro ao atualizar configuração",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTogglingSchedule(false);
+    }
+  };
+
   const resetForm = () => {
     setFormData({
       email: "",
@@ -399,6 +455,14 @@ export function EmailMonitorList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 border rounded-md px-3 py-1.5 text-sm">
+            <span className="text-muted-foreground">Agendamento</span>
+            <Switch
+              checked={scheduleSettings?.enabled ?? true}
+              onCheckedChange={handleToggleSchedule}
+              disabled={isTogglingSchedule}
+            />
+          </div>
           <Button
             variant="outline"
             onClick={handleCheckAllNow}

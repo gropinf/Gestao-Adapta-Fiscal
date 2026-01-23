@@ -14,7 +14,12 @@ interface CheckResult {
   xmlsFound: number;
   xmlsProcessed: number;
   xmlsDuplicated: number;
-  errors: string[];
+  errors: Array<{
+    stage: string;
+    message: string;
+    emailUid?: number;
+    filename?: string;
+  }>;
   details?: any;
 }
 
@@ -31,6 +36,20 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     xmlsProcessed: 0,
     xmlsDuplicated: 0,
     errors: [],
+  };
+
+  const addError = (stage: string, message: string, extra?: { emailUid?: number; filename?: string }) => {
+    result.errors.push({
+      stage,
+      message,
+      ...(extra || {}),
+    });
+  };
+
+  const getFirstErrorSummary = () => {
+    const first = result.errors[0];
+    if (!first) return null;
+    return `${first.stage}: ${first.message}`;
   };
 
   let connection: any = null;
@@ -110,8 +129,9 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
     // 6. Processar cada email
     for (const message of messages) {
+      let emailUid: number | undefined;
       try {
-        const emailUid = message.attributes.uid;
+        emailUid = message.attributes.uid;
         
         // Verificar se já processamos este email
         if (monitor.lastEmailId && emailUid <= parseInt(monitor.lastEmailId)) {
@@ -151,7 +171,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             
             if (!isNfeXml && !isEventXml) {
               console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe ou Evento`);
-              result.errors.push(`${filename}: Não é XML de NFe/NFCe ou Evento`);
+              addError("xml-validate", "Não é XML de NFe/NFCe ou Evento", { filename, emailUid });
               continue;
             }
 
@@ -160,7 +180,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
               const eventCnpj = parsedEvent.cnpj;
               const company = await storage.getCompanyByCnpj(eventCnpj);
               if (!company) {
-                result.errors.push(`${filename}: Empresa com CNPJ ${eventCnpj} não encontrada`);
+                addError("company", `Empresa com CNPJ ${eventCnpj} não encontrada`, { filename, emailUid });
                 continue;
               }
 
@@ -182,7 +202,11 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
                 const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
                 if (!saveResult.success) {
-                  result.errors.push(`${filename}: Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
+                  addError(
+                    "storage",
+                    `Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+                    { filename, emailUid }
+                  );
                   continue;
                 }
 
@@ -231,7 +255,11 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
                 const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
                 if (!saveResult.success) {
-                  result.errors.push(`${filename}: Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
+                  addError(
+                    "storage",
+                    `Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+                    { filename, emailUid }
+                  );
                   continue;
                 }
 
@@ -294,8 +322,12 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
             // Salvar XML no Contabo Storage
             const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
-            if (!saveResult.success) {
-              result.errors.push(`${filename}: Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`);
+          if (!saveResult.success) {
+            addError(
+              "storage",
+              `Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+              { filename, emailUid }
+            );
               continue;
             }
 
@@ -320,10 +352,10 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             console.log(`[IMAP Monitor] ✅ XML processado: ${parsedXml.chave.substring(0, 15)}... (${parsedXml.numeroNota || 'S/N'})`);
             result.xmlsProcessed++;
 
-          } catch (xmlError) {
-            const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
-            console.error(`[IMAP Monitor] ❌ Erro ao processar XML ${filename}:`, errorMsg);
-            result.errors.push(`${filename}: ${errorMsg}`);
+        } catch (xmlError) {
+          const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
+          console.error(`[IMAP Monitor] ❌ Erro ao processar XML ${filename}:`, errorMsg);
+          addError("xml-process", errorMsg, { filename, emailUid });
           }
         }
 
@@ -332,10 +364,10 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           lastEmailId: emailUid.toString(),
         });
 
-      } catch (emailError) {
+    } catch (emailError) {
         const errorMsg = emailError instanceof Error ? emailError.message : 'Erro desconhecido';
         console.error(`[IMAP Monitor] ⚠️ Erro ao processar email:`, errorMsg);
-        result.errors.push(`Email: ${errorMsg}`);
+      addError("email", errorMsg, { emailUid });
       }
     }
 
@@ -367,6 +399,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       xmlsFound: result.xmlsFound,
       xmlsProcessed: result.xmlsProcessed,
       xmlsDuplicated: result.xmlsDuplicated,
+      errorMessage: result.errors.length > 0 ? getFirstErrorSummary() : null,
       errorDetails: result.errors.length > 0 ? JSON.stringify(result.errors) : null,
     });
 
@@ -378,7 +411,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     
     result.success = false;
     result.message = `Erro ao verificar emails: ${errorMsg}`;
-    result.errors.push(errorMsg);
+    addError("monitor", errorMsg);
     
     // Atualizar log com erro
     const duration = Date.now() - startTime;

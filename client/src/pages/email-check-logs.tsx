@@ -60,6 +60,13 @@ interface EmailMonitor {
   companyId: string;
 }
 
+interface ErrorDetailEntry {
+  stage?: string;
+  message?: string;
+  emailUid?: number;
+  filename?: string;
+}
+
 export default function EmailCheckLogs() {
   const { user } = useAuthStore();
   const { toast } = useToast();
@@ -70,6 +77,36 @@ export default function EmailCheckLogs() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<EmailCheckLog | null>(null);
   const [copiedDetails, setCopiedDetails] = useState(false);
+
+  const parseErrorDetails = (details: string | null): ErrorDetailEntry[] => {
+    if (!details) return [];
+    try {
+      const parsed = JSON.parse(details);
+      if (Array.isArray(parsed)) return parsed;
+      return [];
+    } catch {
+      return [];
+    }
+  };
+
+  const getStageLabel = (stage?: string) => {
+    switch (stage) {
+      case "monitor":
+        return "Monitor";
+      case "email":
+        return "Leitura email";
+      case "xml-validate":
+        return "Validar XML";
+      case "xml-process":
+        return "Processar XML";
+      case "storage":
+        return "Storage";
+      case "company":
+        return "Empresa";
+      default:
+        return stage || "Erro";
+    }
+  };
 
   // Fetch email monitors for filter (apenas admin - funcionalidade global)
   const { data: monitors = [] } = useQuery<EmailMonitor[]>({
@@ -431,6 +468,11 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                         <TableCell>
                           {log.errorMessage || log.errorDetails ? (
                             <div className="flex items-center gap-2 max-w-[220px]">
+                              {parseErrorDetails(log.errorDetails)[0]?.stage && (
+                                <Badge variant="outline" className="text-[10px] px-1.5">
+                                  {getStageLabel(parseErrorDetails(log.errorDetails)[0]?.stage)}
+                                </Badge>
+                              )}
                               <span className="truncate text-xs text-red-600" title={log.errorMessage || "Detalhes disponíveis"}>
                                 {log.errorMessage || "Detalhes disponíveis"}
                               </span>
@@ -524,9 +566,25 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                   )}
                 </Button>
               </div>
-              <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap">
-                {selectedLog?.errorDetails || "Sem detalhes técnicos"}
-              </pre>
+              {parseErrorDetails(selectedLog?.errorDetails || null).length > 0 ? (
+                <div className="space-y-2 max-h-64 overflow-auto rounded-md border bg-muted/40 p-3">
+                  {parseErrorDetails(selectedLog?.errorDetails || null).map((entry, index) => (
+                    <div key={`${entry.stage}-${index}`} className="text-xs">
+                      <div className="font-semibold text-red-700">
+                        {getStageLabel(entry.stage)}: {entry.message}
+                      </div>
+                      <div className="text-muted-foreground">
+                        {entry.filename ? `Arquivo: ${entry.filename}` : ""}
+                        {entry.emailUid ? ` • UID: ${entry.emailUid}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap">
+                  {selectedLog?.errorDetails || "Sem detalhes técnicos"}
+                </pre>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
               <span>Emails verificados: {selectedLog?.emailsChecked ?? 0}</span>

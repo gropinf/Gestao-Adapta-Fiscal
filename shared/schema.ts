@@ -178,6 +178,13 @@ export const emailMonitors = pgTable("email_monitors", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Email monitor schedule settings (global)
+export const emailMonitorScheduleSettings = pgTable("email_monitor_schedule_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  enabled: boolean("enabled").default(true).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // Email Global Settings table - Configuração SMTP global do sistema
 export const emailGlobalSettings = pgTable("email_global_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -423,6 +430,11 @@ export const insertEmailMonitorSchema = createInsertSchema(emailMonitors).omit({
   updatedAt: true,
 });
 
+export const insertEmailMonitorScheduleSettingsSchema = createInsertSchema(emailMonitorScheduleSettings).omit({
+  id: true,
+  updatedAt: true,
+});
+
 export const insertEmailGlobalSettingsSchema = createInsertSchema(emailGlobalSettings).omit({
   id: true,
   createdAt: true,
@@ -479,6 +491,9 @@ export type InsertAlert = z.infer<typeof insertAlertSchema>;
 
 export type EmailMonitor = typeof emailMonitors.$inferSelect;
 export type InsertEmailMonitor = z.infer<typeof insertEmailMonitorSchema>;
+
+export type EmailMonitorScheduleSettings = typeof emailMonitorScheduleSettings.$inferSelect;
+export type InsertEmailMonitorScheduleSettings = z.infer<typeof insertEmailMonitorScheduleSettingsSchema>;
 
 export type EmailGlobalSettings = typeof emailGlobalSettings.$inferSelect;
 export type InsertEmailGlobalSettings = z.infer<typeof insertEmailGlobalSettingsSchema>;

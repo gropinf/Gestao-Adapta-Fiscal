@@ -9,6 +9,7 @@ import {
   actions,
   alerts,
   emailMonitors,
+  emailMonitorScheduleSettings,
   emailGlobalSettings,
   accessRequests,
   userAccessLogs,
@@ -31,6 +32,8 @@ import {
   type InsertAlert,
   type EmailMonitor,
   type InsertEmailMonitor,
+  type EmailMonitorScheduleSettings,
+  type InsertEmailMonitorScheduleSettings,
   type EmailGlobalSettings,
   type InsertEmailGlobalSettings,
   type AccessRequest,
@@ -154,6 +157,12 @@ export interface IStorage {
   updateEmailMonitor(id: string, monitor: Partial<InsertEmailMonitor>): Promise<EmailMonitor | undefined>;
   deleteEmailMonitor(id: string): Promise<void>;
   updateEmailMonitorLastCheck(id: string): Promise<void>;
+
+  // Email monitor schedule settings
+  getEmailMonitorScheduleSettings(): Promise<EmailMonitorScheduleSettings | undefined>;
+  upsertEmailMonitorScheduleSettings(
+    settings: InsertEmailMonitorScheduleSettings
+  ): Promise<EmailMonitorScheduleSettings>;
 
   // Email Global Settings
   getEmailGlobalSettings(): Promise<EmailGlobalSettings | undefined>;
@@ -767,6 +776,29 @@ export class DatabaseStorage implements IStorage {
       .update(emailMonitors)
       .set({ lastCheckedAt: new Date() })
       .where(eq(emailMonitors.id, id));
+  }
+
+  async getEmailMonitorScheduleSettings(): Promise<EmailMonitorScheduleSettings | undefined> {
+    const [settings] = await db.select().from(emailMonitorScheduleSettings).limit(1);
+    return settings || undefined;
+  }
+
+  async upsertEmailMonitorScheduleSettings(
+    settings: InsertEmailMonitorScheduleSettings
+  ): Promise<EmailMonitorScheduleSettings> {
+    const [existing] = await db.select().from(emailMonitorScheduleSettings).limit(1);
+
+    if (existing) {
+      const [updated] = await db
+        .update(emailMonitorScheduleSettings)
+        .set({ ...settings, updatedAt: new Date() })
+        .where(eq(emailMonitorScheduleSettings.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db.insert(emailMonitorScheduleSettings).values(settings).returning();
+    return created;
   }
 
   async getEmailGlobalSettings(): Promise<EmailGlobalSettings | undefined> {

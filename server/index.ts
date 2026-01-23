@@ -66,6 +66,12 @@ app.use((req, res, next) => {
 
     isEmailMonitorRunning = true;
     try {
+      const scheduleSettings = await storage.getEmailMonitorScheduleSettings();
+      if (scheduleSettings && scheduleSettings.enabled === false) {
+        log("[IMAP Monitor] Agendamento desativado. Execução ignorada.");
+        return;
+      }
+
       const admins = await storage.getUsersByRole("admin");
       const adminUserId = admins[0]?.id;
       if (!adminUserId) {
