@@ -2742,6 +2742,13 @@ ${company.razaoSocial}
       res.json(settings || { enabled: true });
     } catch (error) {
       console.error("Get email monitor schedule error:", error);
+      const message = error instanceof Error ? error.message : "Internal server error";
+      const code = (error as any)?.code;
+      if (code === "42P01" || message.includes("email_monitor_schedule_settings")) {
+        return res.status(500).json({
+          error: "Tabela de agendamento não encontrada. Execute a migration 0003_add_email_monitor_schedule_settings.sql",
+        });
+      }
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -2763,6 +2770,13 @@ ${company.razaoSocial}
       res.json(settings);
     } catch (error) {
       console.error("Update email monitor schedule error:", error);
+      const message = error instanceof Error ? error.message : "Internal server error";
+      const code = (error as any)?.code;
+      if (code === "42P01" || message.includes("email_monitor_schedule_settings")) {
+        return res.status(500).json({
+          error: "Tabela de agendamento não encontrada. Execute a migration 0003_add_email_monitor_schedule_settings.sql",
+        });
+      }
       res.status(500).json({ error: "Internal server error" });
     }
   });
