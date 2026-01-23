@@ -2833,7 +2833,7 @@ ${company.razaoSocial}
   // Create email monitor (admin only - global functionality)
   app.post("/api/email-monitors", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
-      const { companyId, email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes } = req.body;
+      const { companyId, email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes, deleteAfterProcess } = req.body;
 
       // companyId não é mais obrigatório (monitor é global)
       if (!email || !password || !host || !port) {
@@ -2859,6 +2859,7 @@ ${company.razaoSocial}
         companyId: companyId || 'NULL (global)',
         monitorSince: monitorSince || 'NULL',
         checkIntervalMinutes: checkIntervalMinutes ?? 15,
+        deleteAfterProcess: deleteAfterProcess ?? false,
       });
 
       const monitor = await storage.createEmailMonitor({
@@ -2869,6 +2870,7 @@ ${company.razaoSocial}
         port,
         ssl: ssl ?? true,
         active: active ?? true,
+        deleteAfterProcess: deleteAfterProcess ?? false,
         monitorSince: monitorSince ? new Date(monitorSince) : null,
         checkIntervalMinutes: checkIntervalMinutes ?? 15,
       });
@@ -2891,7 +2893,7 @@ ${company.razaoSocial}
   app.put("/api/email-monitors/:id", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      const { email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes } = req.body;
+      const { email, password, host, port, ssl, active, monitorSince, checkIntervalMinutes, deleteAfterProcess } = req.body;
 
       // Verificar se monitor existe
       const existingMonitor = await storage.getEmailMonitor(id);
@@ -2918,6 +2920,7 @@ ${company.razaoSocial}
         email,
         monitorSince: monitorSince !== undefined ? (monitorSince || 'NULL') : 'não enviado',
         checkIntervalMinutes: checkIntervalMinutes !== undefined ? checkIntervalMinutes : 'não enviado',
+        deleteAfterProcess: deleteAfterProcess !== undefined ? deleteAfterProcess : 'não enviado',
       });
 
       const updateData: any = {};
@@ -2927,6 +2930,7 @@ ${company.razaoSocial}
       if (port) updateData.port = port;
       if (ssl !== undefined) updateData.ssl = ssl;
       if (active !== undefined) updateData.active = active;
+      if (deleteAfterProcess !== undefined) updateData.deleteAfterProcess = deleteAfterProcess;
       if (monitorSince !== undefined) updateData.monitorSince = monitorSince ? new Date(monitorSince) : null;
       if (checkIntervalMinutes !== undefined) updateData.checkIntervalMinutes = checkIntervalMinutes;
 
@@ -3891,90 +3895,66 @@ ${company.razaoSocial}
 
       let attachments: Array<{ filename: string; content?: Buffer; path?: string }> = [];
 
-      if (xmls.length <= 10) {
-        // Se até 10 XMLs, enviar como anexos individuais
-        for (const xml of xmls) {
-          try {
-            const xmlBuffer = await readXmlBuffer(xml.filepath);
-            if (xmlBuffer) {
-              attachments.push({
-                filename: `NFe${xml.chave}.xml`,
-                content: xmlBuffer,
-              });
-            } else {
-              console.warn(`Arquivo XML não encontrado: ${xml.filepath}`);
-            }
-          } catch (error) {
-            console.warn(`Erro ao ler arquivo XML ${xml.chave}:`, error);
-          }
+      const xmlPaths: string[] = [];
+      for (const xml of xmls) {
+        try {
+          const xmlPath = path.resolve(xml.filepath);
+          await fs.access(xmlPath);
+          xmlPaths.push(xmlPath);
+        } catch (error) {
+          console.warn(`Arquivo XML não encontrado: ${xml.filepath}`);
         }
-
-        if (attachments.length === 0) {
-          return res.status(500).json({ error: "Erro ao ler arquivos XML" });
-        }
-      } else {
-        // Se mais de 10 XMLs, compactar em ZIP
-        const xmlPaths: string[] = [];
-        for (const xml of xmls) {
-          try {
-            const xmlPath = path.resolve(xml.filepath);
-            await fs.access(xmlPath);
-            xmlPaths.push(xmlPath);
-          } catch (error) {
-            console.warn(`Arquivo XML não encontrado: ${xml.filepath}`);
-          }
-        }
-
-        if (xmlPaths.length === 0) {
-          return res.status(500).json({ error: "Erro ao ler arquivos XML" });
-        }
-
-        // Gerar nome do arquivo ZIP
-        const cnpj = company.cnpj;
-        const razaoSocial = sanitizeFilename(company.razaoSocial);
-        const dtInicio = formatDateFilename(dataInicio);
-        const dtFim = formatDateFilename(dataFim);
-        const zipFilename = `XMLs_${cnpj}_${razaoSocial}_${dtInicio}_A_${dtFim}.zip`;
-        const zipPath = path.join("/tmp", zipFilename);
-
-        // Criar arquivo ZIP
-        await new Promise<void>((resolve, reject) => {
-          const fsStream = fsSync.createWriteStream(zipPath);
-          const archive = archiver("zip", {
-            zlib: { level: 9 } // Máxima compressão
-          });
-
-          fsStream.on("close", () => {
-            console.log(`ZIP criado: ${archive.pointer()} bytes`);
-            resolve();
-          });
-
-          fsStream.on("error", (err: Error) => {
-            console.error("Erro no stream do arquivo ZIP:", err);
-            reject(err);
-          });
-
-          archive.on("error", (err: Error) => {
-            console.error("Erro ao criar arquivo ZIP:", err);
-            reject(err);
-          });
-
-          archive.pipe(fsStream);
-
-          // Adiciona cada XML ao arquivo
-          for (const xmlPath of xmlPaths) {
-            const filename = path.basename(xmlPath);
-            archive.file(xmlPath, { name: filename });
-          }
-
-          archive.finalize();
-        });
-
-        attachments.push({
-          filename: zipFilename,
-          path: zipPath,
-        });
       }
+
+      if (xmlPaths.length === 0) {
+        return res.status(500).json({ error: "Erro ao ler arquivos XML" });
+      }
+
+      // Gerar nome do arquivo ZIP
+      const cnpj = company.cnpj;
+      const razaoSocial = sanitizeFilename(company.razaoSocial);
+      const dtInicio = formatDateFilename(dataInicio);
+      const dtFim = formatDateFilename(dataFim);
+      const zipFilename = `XMLs_${cnpj}_${razaoSocial}_${dtInicio}_A_${dtFim}.zip`;
+      const zipPath = path.join("/tmp", zipFilename);
+
+      // Criar arquivo ZIP
+      await new Promise<void>((resolve, reject) => {
+        const fsStream = fsSync.createWriteStream(zipPath);
+        const archive = archiver("zip", {
+          zlib: { level: 9 } // Máxima compressão
+        });
+
+        fsStream.on("close", () => {
+          console.log(`ZIP criado: ${archive.pointer()} bytes`);
+          resolve();
+        });
+
+        fsStream.on("error", (err: Error) => {
+          console.error("Erro no stream do arquivo ZIP:", err);
+          reject(err);
+        });
+
+        archive.on("error", (err: Error) => {
+          console.error("Erro ao criar arquivo ZIP:", err);
+          reject(err);
+        });
+
+        archive.pipe(fsStream);
+
+        // Adiciona cada XML ao arquivo
+        for (const xmlPath of xmlPaths) {
+          const filename = path.basename(xmlPath);
+          archive.file(xmlPath, { name: filename });
+        }
+
+        archive.finalize();
+      });
+
+      attachments.push({
+        filename: zipFilename,
+        path: zipPath,
+      });
 
       // Enviar email com XMLs em anexo
       const emailData = {
@@ -4014,7 +3994,7 @@ ${company.razaoSocial}
 
       if (!result.success) {
         // Remover arquivo ZIP temporário mesmo em caso de erro
-        if (xmls.length > 10 && attachments[0]?.path) {
+        if (attachments[0]?.path) {
           try {
             await fs.unlink(attachments[0].path);
           } catch (err) {
@@ -4028,7 +4008,7 @@ ${company.razaoSocial}
       }
 
       // Remover arquivo ZIP temporário após envio bem-sucedido
-      if (xmls.length > 10 && attachments[0]?.path) {
+      if (attachments[0]?.path) {
         try {
           await fs.unlink(attachments[0].path);
         } catch (err) {
@@ -4046,7 +4026,7 @@ ${company.razaoSocial}
           companyId: company.id,
           destinationEmail: to,
           subject,
-          isZipped: xmls.length > 10,
+          isZipped: true,
         }),
       });
 

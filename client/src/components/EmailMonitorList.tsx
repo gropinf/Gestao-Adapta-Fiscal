@@ -46,6 +46,7 @@ interface EmailMonitor {
   port: number;
   ssl: boolean;
   active: boolean;
+  deleteAfterProcess: boolean;
   monitorSince: string | null;
   lastCheckedAt: string | null;
   lastEmailId: string | null;
@@ -80,6 +81,7 @@ export function EmailMonitorList() {
     host: "imap.gmail.com",
     port: 993,
     ssl: true,
+    deleteAfterProcess: false,
     monitorSince: "", // Data inicial para monitoramento
     checkIntervalMinutes: 15, // Intervalo padrão: 15 minutos
   });
@@ -117,6 +119,7 @@ export function EmailMonitorList() {
         host: data.host,
         port: data.port,
         ssl: data.ssl,
+        deleteAfterProcess: data.deleteAfterProcess,
         monitorSince: data.monitorSince || null,
         checkIntervalMinutes: data.checkIntervalMinutes,
       };
@@ -402,6 +405,7 @@ export function EmailMonitorList() {
       host: "imap.gmail.com",
       port: 993,
       ssl: true,
+      deleteAfterProcess: false,
       monitorSince: "",
       checkIntervalMinutes: 15,
     });
@@ -415,6 +419,7 @@ export function EmailMonitorList() {
       host: monitor.host,
       port: monitor.port,
       ssl: monitor.ssl,
+      deleteAfterProcess: monitor.deleteAfterProcess,
       monitorSince: monitor.monitorSince ? monitor.monitorSince.split('T')[0] : "", // Format para input date
       checkIntervalMinutes: monitor.checkIntervalMinutes,
     });
@@ -715,6 +720,15 @@ export function EmailMonitorList() {
               <Label htmlFor="ssl">Usar SSL/TLS</Label>
             </div>
 
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="deleteAfterProcess"
+                checked={formData.deleteAfterProcess}
+                onCheckedChange={(checked) => setFormData({ ...formData, deleteAfterProcess: checked })}
+              />
+              <Label htmlFor="deleteAfterProcess">Deletar email após processar</Label>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="monitorSince">Monitorar A Partir De (opcional)</Label>
               <Input
@@ -872,6 +886,15 @@ export function EmailMonitorList() {
               <Label htmlFor="edit-ssl">Usar SSL/TLS</Label>
             </div>
 
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="edit-deleteAfterProcess"
+                checked={formData.deleteAfterProcess}
+                onCheckedChange={(checked) => setFormData({ ...formData, deleteAfterProcess: checked })}
+              />
+              <Label htmlFor="edit-deleteAfterProcess">Deletar email após processar</Label>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="edit-monitorSince">Monitorar A Partir De (opcional)</Label>
               <Input
@@ -918,6 +941,7 @@ export function EmailMonitorList() {
                     host: formData.host,
                     port: formData.port,
                     ssl: formData.ssl,
+                    deleteAfterProcess: formData.deleteAfterProcess,
                     monitorSince: formData.monitorSince || null,
                     checkIntervalMinutes: formData.checkIntervalMinutes,
                   };

@@ -103,6 +103,8 @@ export default function EmailCheckLogs() {
         return "Storage";
       case "company":
         return "Empresa";
+      case "imap-search":
+        return "Busca IMAP";
       default:
         return stage || "Erro";
     }
@@ -466,7 +468,7 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {log.errorMessage || log.errorDetails ? (
+                          {log.status === "error" ? (
                             <div className="flex items-center gap-2 max-w-[220px]">
                               {parseErrorDetails(log.errorDetails)[0]?.stage && (
                                 <Badge variant="outline" className="text-[10px] px-1.5">
@@ -474,19 +476,17 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                                 </Badge>
                               )}
                               <span className="truncate text-xs text-red-600" title={log.errorMessage || "Detalhes disponíveis"}>
-                                {log.errorMessage || "Detalhes disponíveis"}
+                                {log.errorMessage || "Sem detalhes"}
                               </span>
-                              {(log.errorDetails || log.errorMessage) && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => setSelectedLog(log)}
-                                  className="h-6 w-6 text-red-600"
-                                  aria-label="Ver detalhes do erro"
-                                >
-                                  <Info className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setSelectedLog(log)}
+                                className="h-6 w-6 text-red-600"
+                                aria-label="Ver detalhes do erro"
+                              >
+                                <Info className="h-3.5 w-3.5" />
+                              </Button>
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">-</span>
@@ -582,7 +582,7 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                 </div>
               ) : (
                 <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap">
-                  {selectedLog?.errorDetails || "Sem detalhes técnicos"}
+                  {selectedLog?.errorDetails || selectedLog?.errorMessage || "Sem detalhes técnicos"}
                 </pre>
               )}
             </div>

@@ -170,6 +170,7 @@ export const emailMonitors = pgTable("email_monitors", {
   port: integer("port").notNull(),
   ssl: boolean("ssl").default(true).notNull(),
   active: boolean("active").default(true).notNull(),
+  deleteAfterProcess: boolean("delete_after_process").default(false).notNull(),
   monitorSince: timestamp("monitor_since"), // Data inicial para monitoramento (ignora emails anteriores)
   lastCheckedAt: timestamp("last_checked_at"),
   lastEmailId: text("last_email_id"), // ID do último email processado (para evitar duplicatas)

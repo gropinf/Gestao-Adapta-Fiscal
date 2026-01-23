@@ -1,4 +1,5 @@
 import imapSimple from 'imap-simple';
+import unzipper from "unzipper";
 import { simpleParser } from 'mailparser';
 import { storage } from './storage';
 import { parseXmlContent, isValidNFeXml } from './xmlParser';
@@ -46,6 +47,196 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     });
   };
 
+  const processXmlContent = async (xmlContent: string, filename: string, emailUid?: number) => {
+    let hadError = false;
+    let processed = false;
+    let duplicated = false;
+
+    const isNfeXml = isValidNFeXml(xmlContent);
+    const isEventXml = !isNfeXml && isValidEventXml(xmlContent);
+
+    if (!isNfeXml && !isEventXml) {
+      console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe ou Evento`);
+      addError("xml-validate", "Não é XML de NFe/NFCe ou Evento", { filename, emailUid });
+      return { hadError: true, processed, duplicated };
+    }
+
+    if (isEventXml) {
+      const parsedEvent = await parseEventOrInutilizacao(xmlContent);
+      const eventCnpj = parsedEvent.cnpj;
+      const company = await storage.getCompanyByCnpj(eventCnpj);
+      if (!company) {
+        addError("company", `Empresa com CNPJ ${eventCnpj} não encontrada`, { filename, emailUid });
+        return { hadError: true, processed, duplicated };
+      }
+
+      if (parsedEvent.tipo === "evento") {
+        const eventoData = parsedEvent as ParsedEventoData;
+        const duplicate = await storage.getDuplicateXmlEventForEvento({
+          companyId: company.id,
+          chaveNFe: eventoData.chaveNFe,
+          tipoEvento: eventoData.tipoEvento,
+          numeroSequencia: eventoData.numeroSequencia ?? null,
+          protocolo: eventoData.protocolo ?? null,
+          dataEvento: eventoData.dataEvento ?? null,
+          horaEvento: eventoData.horaEvento ?? null,
+        });
+        if (duplicate) {
+          return { hadError, processed, duplicated: true };
+        }
+
+        const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+        if (!saveResult.success) {
+          addError(
+            "storage",
+            `Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+            { filename, emailUid }
+          );
+          return { hadError: true, processed, duplicated };
+        }
+
+        const xml = await storage.getXmlByChave(eventoData.chaveNFe);
+
+        await storage.createXmlEvent({
+          companyId: company.id,
+          chaveNFe: eventoData.chaveNFe,
+          xmlId: xml?.id || null,
+          tipoEvento: eventoData.tipoEvento,
+          codigoEvento: eventoData.codigoEvento,
+          dataEvento: eventoData.dataEvento,
+          horaEvento: eventoData.horaEvento,
+          numeroSequencia: eventoData.numeroSequencia,
+          protocolo: eventoData.protocolo,
+          justificativa: eventoData.justificativa || null,
+          correcao: eventoData.correcao || null,
+          ano: null,
+          serie: null,
+          numeroInicial: null,
+          numeroFinal: null,
+          cnpj: eventoData.cnpj,
+          modelo: eventoData.modelo,
+          filepath: saveResult.filepath || "",
+        });
+
+        if (eventoData.tipoEvento === "cancelamento" && xml) {
+          await storage.updateXml(xml.id, { dataCancelamento: eventoData.dataEvento });
+        }
+
+        return { hadError, processed: true, duplicated };
+      }
+
+      const inutData = parsedEvent as ParsedInutilizacaoData;
+      const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
+        companyId: company.id,
+        modelo: inutData.modelo,
+        serie: inutData.serie,
+        numeroInicial: inutData.numeroInicial,
+        numeroFinal: inutData.numeroFinal,
+        protocolo: inutData.protocolo ?? null,
+        dataEvento: inutData.dataEvento ?? null,
+        horaEvento: inutData.horaEvento ?? null,
+      });
+      if (duplicate) {
+        return { hadError, processed, duplicated: true };
+      }
+
+      const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+      if (!saveResult.success) {
+        addError(
+          "storage",
+          `Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+          { filename, emailUid }
+        );
+        return { hadError: true, processed, duplicated };
+      }
+
+      await storage.createXmlEvent({
+        companyId: company.id,
+        chaveNFe: null,
+        xmlId: null,
+        tipoEvento: "inutilizacao",
+        codigoEvento: null,
+        dataEvento: inutData.dataEvento,
+        horaEvento: inutData.horaEvento,
+        numeroSequencia: null,
+        protocolo: inutData.protocolo,
+        justificativa: inutData.justificativa,
+        correcao: null,
+        ano: inutData.ano,
+        serie: inutData.serie,
+        numeroInicial: inutData.numeroInicial,
+        numeroFinal: inutData.numeroFinal,
+        cnpj: inutData.cnpj,
+        modelo: inutData.modelo,
+        filepath: saveResult.filepath || "",
+      });
+
+      return { hadError, processed: true, duplicated };
+    }
+
+    // Parsear XML de NFe/NFCe
+    const parsedXml = await parseXmlContent(xmlContent);
+    
+    // Verificar duplicata pela chave
+    const existingXml = await storage.getXmlByChave(parsedXml.chave);
+    if (existingXml) {
+      console.log(`[IMAP Monitor] 📋 XML já existe: ${parsedXml.chave.substring(0, 15)}...`);
+      return { hadError, processed, duplicated: true };
+    }
+
+    // Buscar ou criar empresa pelo CNPJ do emitente
+    await getOrCreateCompanyByCnpj(
+      parsedXml.cnpjEmitente,
+      parsedXml,
+      userId
+    );
+
+    // Determinar categoria (emitida ou recebida)
+    const userCompanies = await storage.getCompaniesByUser(userId);
+    const userCnpjs = new Set(userCompanies.map(c => c.cnpj));
+    
+    let categoria: "emitida" | "recebida";
+    if (userCnpjs.has(parsedXml.cnpjEmitente)) {
+      categoria = "emitida";
+    } else if (parsedXml.cnpjDestinatario && userCnpjs.has(parsedXml.cnpjDestinatario)) {
+      categoria = "recebida";
+    } else {
+      categoria = "emitida"; // Padrão
+    }
+
+    // Salvar XML no Contabo Storage
+    const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
+    if (!saveResult.success) {
+      addError(
+        "storage",
+        `Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
+        { filename, emailUid }
+      );
+      return { hadError: true, processed, duplicated };
+    }
+
+    // Salvar no banco de dados
+    await storage.createXml({
+      companyId: null,
+      chave: parsedXml.chave,
+      numeroNota: parsedXml.numeroNota || null,
+      tipoDoc: parsedXml.tipoDoc,
+      dataEmissao: parsedXml.dataEmissao,
+      hora: parsedXml.hora || "00:00:00",
+      cnpjEmitente: parsedXml.cnpjEmitente,
+      cnpjDestinatario: parsedXml.cnpjDestinatario || null,
+      razaoSocialDestinatario: parsedXml.razaoSocialDestinatario || null,
+      totalNota: parsedXml.totalNota.toString(),
+      totalImpostos: parsedXml.totalImpostos.toString(),
+      categoria,
+      statusValidacao: "valido",
+      filepath: saveResult.filepath || "",
+    });
+
+    console.log(`[IMAP Monitor] ✅ XML processado: ${parsedXml.chave.substring(0, 15)}... (${parsedXml.numeroNota || 'S/N'})`);
+    return { hadError, processed: true, duplicated };
+  };
+
   const getFirstErrorSummary = () => {
     const first = result.errors[0];
     if (!first) return null;
@@ -76,6 +267,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     console.log(`[IMAP Monitor] 📅 Monitorar desde: ${monitor.monitorSince || 'Todos os emails'}`);
 
     // 1. Configurar conexão IMAP
+    const authTimeout = Number(process.env.IMAP_AUTH_TIMEOUT_MS || 30000);
+    const connTimeout = Number(process.env.IMAP_CONN_TIMEOUT_MS || 30000);
     const config = {
       imap: {
         user: monitor.email,
@@ -84,7 +277,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         port: monitor.port,
         tls: monitor.ssl,
         tlsOptions: { rejectUnauthorized: false },
-        authTimeout: 10000,
+        authTimeout,
+        connTimeout,
       }
     };
 
@@ -97,29 +291,72 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     await connection.openBox('INBOX');
     console.log(`[IMAP Monitor] 📬 Caixa INBOX aberta`);
 
-    // 4. Construir critérios de busca
+    // 4. Construir critérios de busca (paginado por UID)
+    const subjectFilter = (process.env.IMAP_SUBJECT_FILTER || "xml").trim();
+    const searchTimeoutMs = Number(process.env.IMAP_SEARCH_TIMEOUT_MS || 30000);
+    const batchSize = Number(
+      process.env.IMAP_MAX_EMAILS_PER_RUN ||
+      process.env.IMAP_MAX_EMAILS_PER_DAY ||
+      100
+    );
+
     const searchCriteria: any[] = ['ALL'];
-    
-    // Filtrar por data se configurado
     if (monitor.monitorSince) {
       const sinceDate = new Date(monitor.monitorSince);
       searchCriteria.push(['SINCE', sinceDate]);
       console.log(`[IMAP Monitor] 📅 Filtrando emails desde: ${sinceDate.toISOString()}`);
     }
 
-    // Buscar apenas emails com anexos
+    if (monitor.lastEmailId) {
+      const lastUid = parseInt(monitor.lastEmailId);
+      if (!Number.isNaN(lastUid)) {
+        searchCriteria.push(['UID', `${lastUid + 1}:*`]);
+        console.log(`[IMAP Monitor] 🔁 Buscando a partir do UID ${lastUid + 1}`);
+      }
+    }
+
+    if (subjectFilter) {
+      searchCriteria.push(['SUBJECT', subjectFilter]);
+      console.log(`[IMAP Monitor] 🔎 Filtro por assunto: "${subjectFilter}"`);
+    }
+
+    // Buscar apenas emails com anexos (filtramos após o download)
     const fetchOptions = {
       bodies: ['HEADER', 'TEXT', ''],
       markSeen: false, // Não marcar como lido
       struct: true,
     };
 
-    // 5. Buscar emails
+    // 5. Buscar emails (paginado por UID)
     console.log(`[IMAP Monitor] 🔍 Buscando emails...`);
-    const messages = await connection.search(searchCriteria, fetchOptions);
-    
+    const searchStart = Date.now();
+    let messages: any[];
+    try {
+      messages = await Promise.race([
+        connection.search(searchCriteria, fetchOptions),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Timeout na busca de emails (${searchTimeoutMs} ms)`)),
+            searchTimeoutMs
+          )
+        ),
+      ]) as any[];
+    } catch (searchError) {
+      const errorMsg = searchError instanceof Error ? searchError.message : "Erro na busca de emails";
+      addError("imap-search", errorMsg);
+      throw searchError;
+    }
+
+    const elapsed = Date.now() - searchStart;
+    console.log(`[IMAP Monitor] ✅ Busca concluída em ${elapsed} ms`);
+
+    messages.sort((a, b) => (a?.attributes?.uid || 0) - (b?.attributes?.uid || 0));
+    if (messages.length > batchSize) {
+      console.log(`[IMAP Monitor] ⚠️ Limitando a ${batchSize} emails por execução`);
+      messages = messages.slice(0, batchSize);
+    }
     result.emailsChecked = messages.length;
-    console.log(`[IMAP Monitor] 📨 Encontrados ${messages.length} email(s)`);
+    console.log(`[IMAP Monitor] 📨 Encontrados ${messages.length} email(s) no total`);
 
     if (messages.length === 0) {
       result.success = true;
@@ -144,6 +381,10 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     // 6. Processar cada email
     for (const message of messages) {
       let emailUid: number | undefined;
+      let emailHadErrors = false;
+      let emailXmlsFound = 0;
+      let emailXmlsProcessed = 0;
+      let emailXmlsDuplicated = 0;
       try {
         emailUid = message.attributes.uid;
         
@@ -169,207 +410,85 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         // 7. Processar anexos XML
         for (const attachment of parsed.attachments) {
           const filename = attachment.filename?.toLowerCase() || '';
-          
-          // Verificar se é arquivo XML
-          if (!filename.endsWith('.xml')) {
+          const contentType = attachment.contentType?.toLowerCase() || '';
+          const isXmlAttachment = filename.endsWith('.xml');
+          const isZipAttachment =
+            filename.endsWith('.zip') ||
+            contentType === "application/zip" ||
+            contentType === "application/x-zip-compressed";
+
+          if (!isXmlAttachment && !isZipAttachment) {
             continue;
           }
 
-          result.xmlsFound++;
-          
+          if (isXmlAttachment) {
+            emailXmlsFound++;
+            result.xmlsFound++;
+
+            try {
+              const xmlContent = attachment.content.toString('utf-8');
+              const { hadError, processed, duplicated } = await processXmlContent(xmlContent, filename, emailUid);
+              if (hadError) emailHadErrors = true;
+              if (processed) {
+                result.xmlsProcessed++;
+                emailXmlsProcessed++;
+              }
+              if (duplicated) {
+                result.xmlsDuplicated++;
+                emailXmlsDuplicated++;
+              }
+            } catch (xmlError) {
+              const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
+              console.error(`[IMAP Monitor] ❌ Erro ao processar XML ${filename}:`, errorMsg);
+              emailHadErrors = true;
+              addError("xml-process", errorMsg, { filename, emailUid });
+            }
+
+            continue;
+          }
+
           try {
-            const xmlContent = attachment.content.toString('utf-8');
-            
-            const isNfeXml = isValidNFeXml(xmlContent);
-            const isEventXml = !isNfeXml && isValidEventXml(xmlContent);
-            
-            if (!isNfeXml && !isEventXml) {
-              console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe ou Evento`);
-              addError("xml-validate", "Não é XML de NFe/NFCe ou Evento", { filename, emailUid });
-              continue;
-            }
+            const zip = await unzipper.Open.buffer(attachment.content);
+            let zipXmlFound = 0;
 
-            if (isEventXml) {
-              const parsedEvent = await parseEventOrInutilizacao(xmlContent);
-              const eventCnpj = parsedEvent.cnpj;
-              const company = await storage.getCompanyByCnpj(eventCnpj);
-              if (!company) {
-                addError("company", `Empresa com CNPJ ${eventCnpj} não encontrada`, { filename, emailUid });
-                continue;
-              }
+            for (const entry of zip.files) {
+              if (entry.type !== "File") continue;
+              const entryName = entry.path.toLowerCase();
+              if (!entryName.endsWith(".xml")) continue;
 
-              if (parsedEvent.tipo === "evento") {
-                const eventoData = parsedEvent as ParsedEventoData;
-                const duplicate = await storage.getDuplicateXmlEventForEvento({
-                  companyId: company.id,
-                  chaveNFe: eventoData.chaveNFe,
-                  tipoEvento: eventoData.tipoEvento,
-                  numeroSequencia: eventoData.numeroSequencia ?? null,
-                  protocolo: eventoData.protocolo ?? null,
-                  dataEvento: eventoData.dataEvento ?? null,
-                  horaEvento: eventoData.horaEvento ?? null,
-                });
-                if (duplicate) {
+              zipXmlFound++;
+              emailXmlsFound++;
+              result.xmlsFound++;
+
+              try {
+                const entryBuffer = await entry.buffer();
+                const xmlContent = entryBuffer.toString("utf-8");
+                const { hadError, processed, duplicated } = await processXmlContent(xmlContent, entry.path, emailUid);
+                if (hadError) emailHadErrors = true;
+                if (processed) {
+                  result.xmlsProcessed++;
+                  emailXmlsProcessed++;
+                }
+                if (duplicated) {
                   result.xmlsDuplicated++;
-                  continue;
+                  emailXmlsDuplicated++;
                 }
-
-                const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
-                if (!saveResult.success) {
-                  addError(
-                    "storage",
-                    `Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
-                    { filename, emailUid }
-                  );
-                  continue;
-                }
-
-                const xml = await storage.getXmlByChave(eventoData.chaveNFe);
-
-                await storage.createXmlEvent({
-                  companyId: company.id,
-                  chaveNFe: eventoData.chaveNFe,
-                  xmlId: xml?.id || null,
-                  tipoEvento: eventoData.tipoEvento,
-                  codigoEvento: eventoData.codigoEvento,
-                  dataEvento: eventoData.dataEvento,
-                  horaEvento: eventoData.horaEvento,
-                  numeroSequencia: eventoData.numeroSequencia,
-                  protocolo: eventoData.protocolo,
-                  justificativa: eventoData.justificativa || null,
-                  correcao: eventoData.correcao || null,
-                  ano: null,
-                  serie: null,
-                  numeroInicial: null,
-                  numeroFinal: null,
-                  cnpj: eventoData.cnpj,
-                  modelo: eventoData.modelo,
-                  filepath: saveResult.filepath || "",
-                });
-
-                if (eventoData.tipoEvento === "cancelamento" && xml) {
-                  await storage.updateXml(xml.id, { dataCancelamento: eventoData.dataEvento });
-                }
-              } else {
-                const inutData = parsedEvent as ParsedInutilizacaoData;
-                const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
-                  companyId: company.id,
-                  modelo: inutData.modelo,
-                  serie: inutData.serie,
-                  numeroInicial: inutData.numeroInicial,
-                  numeroFinal: inutData.numeroFinal,
-                  protocolo: inutData.protocolo ?? null,
-                  dataEvento: inutData.dataEvento ?? null,
-                  horaEvento: inutData.horaEvento ?? null,
-                });
-                if (duplicate) {
-                  result.xmlsDuplicated++;
-                  continue;
-                }
-
-                const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
-                if (!saveResult.success) {
-                  addError(
-                    "storage",
-                    `Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
-                    { filename, emailUid }
-                  );
-                  continue;
-                }
-
-                await storage.createXmlEvent({
-                  companyId: company.id,
-                  chaveNFe: null,
-                  xmlId: null,
-                  tipoEvento: "inutilizacao",
-                  codigoEvento: null,
-                  dataEvento: inutData.dataEvento,
-                  horaEvento: inutData.horaEvento,
-                  numeroSequencia: null,
-                  protocolo: inutData.protocolo,
-                  justificativa: inutData.justificativa,
-                  correcao: null,
-                  ano: inutData.ano,
-                  serie: inutData.serie,
-                  numeroInicial: inutData.numeroInicial,
-                  numeroFinal: inutData.numeroFinal,
-                  cnpj: inutData.cnpj,
-                  modelo: inutData.modelo,
-                  filepath: saveResult.filepath || "",
-                });
+              } catch (xmlError) {
+                const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
+                console.error(`[IMAP Monitor] ❌ Erro ao processar XML do ZIP ${entry.path}:`, errorMsg);
+                emailHadErrors = true;
+                addError("zip-xml-process", errorMsg, { filename: entry.path, emailUid });
               }
-
-              result.xmlsProcessed++;
-              continue;
             }
 
-            // Parsear XML de NFe/NFCe
-            const parsedXml = await parseXmlContent(xmlContent);
-            
-            // Verificar duplicata pela chave
-            const existingXml = await storage.getXmlByChave(parsedXml.chave);
-            if (existingXml) {
-              console.log(`[IMAP Monitor] 📋 XML já existe: ${parsedXml.chave.substring(0, 15)}...`);
-              result.xmlsDuplicated++;
-              continue;
+            if (zipXmlFound === 0) {
+              addError("zip-extract", "Nenhum XML encontrado no arquivo ZIP", { filename, emailUid });
             }
-
-            // Buscar ou criar empresa pelo CNPJ do emitente
-            await getOrCreateCompanyByCnpj(
-              parsedXml.cnpjEmitente,
-              parsedXml,
-              userId
-            );
-
-            // Determinar categoria (emitida ou recebida)
-            const userCompanies = await storage.getCompaniesByUser(userId);
-            const userCnpjs = new Set(userCompanies.map(c => c.cnpj));
-            
-            let categoria: "emitida" | "recebida";
-            if (userCnpjs.has(parsedXml.cnpjEmitente)) {
-              categoria = "emitida";
-            } else if (parsedXml.cnpjDestinatario && userCnpjs.has(parsedXml.cnpjDestinatario)) {
-              categoria = "recebida";
-            } else {
-              categoria = "emitida"; // Padrão
-            }
-
-            // Salvar XML no Contabo Storage
-            const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
-          if (!saveResult.success) {
-            addError(
-              "storage",
-              `Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
-              { filename, emailUid }
-            );
-              continue;
-            }
-
-            // Salvar no banco de dados
-            await storage.createXml({
-              companyId: null,
-              chave: parsedXml.chave,
-              numeroNota: parsedXml.numeroNota || null,
-              tipoDoc: parsedXml.tipoDoc,
-              dataEmissao: parsedXml.dataEmissao,
-              hora: parsedXml.hora || "00:00:00",
-              cnpjEmitente: parsedXml.cnpjEmitente,
-              cnpjDestinatario: parsedXml.cnpjDestinatario || null,
-              razaoSocialDestinatario: parsedXml.razaoSocialDestinatario || null,
-              totalNota: parsedXml.totalNota.toString(),
-              totalImpostos: parsedXml.totalImpostos.toString(),
-              categoria,
-              statusValidacao: "valido",
-              filepath: saveResult.filepath || "",
-            });
-
-            console.log(`[IMAP Monitor] ✅ XML processado: ${parsedXml.chave.substring(0, 15)}... (${parsedXml.numeroNota || 'S/N'})`);
-            result.xmlsProcessed++;
-
-        } catch (xmlError) {
-          const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
-          console.error(`[IMAP Monitor] ❌ Erro ao processar XML ${filename}:`, errorMsg);
-          addError("xml-process", errorMsg, { filename, emailUid });
+          } catch (zipError) {
+            const errorMsg = zipError instanceof Error ? zipError.message : 'Erro desconhecido';
+            console.error(`[IMAP Monitor] ❌ Erro ao abrir ZIP ${filename}:`, errorMsg);
+            emailHadErrors = true;
+            addError("zip-extract", errorMsg, { filename, emailUid });
           }
         }
 
@@ -378,9 +497,35 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           lastEmailId: emailUid.toString(),
         });
 
+        if (monitor.deleteAfterProcess && emailUid) {
+          const shouldDeleteEmail =
+            !emailHadErrors && emailXmlsFound > 0 && (emailXmlsProcessed > 0 || emailXmlsDuplicated > 0);
+
+          if (shouldDeleteEmail) {
+            try {
+              await connection.addFlags(emailUid, '\\Deleted');
+              if (connection.imap?.expunge) {
+                await new Promise<void>((resolve, reject) => {
+                  connection.imap.expunge((err: Error | null) => {
+                    if (err) {
+                      reject(err);
+                      return;
+                    }
+                    resolve();
+                  });
+                });
+              }
+              console.log(`[IMAP Monitor] 🗑️ Email UID ${emailUid} deletado após processamento`);
+            } catch (deleteError) {
+              console.warn(`[IMAP Monitor] ⚠️ Falha ao deletar email UID ${emailUid}:`, deleteError);
+            }
+          }
+        }
+
     } catch (emailError) {
         const errorMsg = emailError instanceof Error ? emailError.message : 'Erro desconhecido';
         console.error(`[IMAP Monitor] ⚠️ Erro ao processar email:`, errorMsg);
+        emailHadErrors = true;
       addError("email", errorMsg, { emailUid });
       }
     }
