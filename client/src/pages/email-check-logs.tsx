@@ -69,6 +69,7 @@ export default function EmailCheckLogs() {
   const [filterDateTo, setFilterDateTo] = useState<string>("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<EmailCheckLog | null>(null);
+  const [copiedDetails, setCopiedDetails] = useState(false);
 
   // Fetch email monitors for filter (apenas admin - funcionalidade global)
   const { data: monitors = [] } = useQuery<EmailMonitor[]>({
@@ -165,6 +166,28 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
       toast({
         title: "Erro ao copiar",
         description: "Não foi possível copiar o log.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCopyDetails = async () => {
+    if (!selectedLog) return;
+    const details = selectedLog.errorDetails || selectedLog.errorMessage || "";
+    if (!details) return;
+
+    try {
+      await navigator.clipboard.writeText(details);
+      setCopiedDetails(true);
+      toast({
+        title: "Detalhes copiados!",
+        description: "Os detalhes do erro foram copiados.",
+      });
+      setTimeout(() => setCopiedDetails(false), 2000);
+    } catch (error) {
+      toast({
+        title: "Erro ao copiar",
+        description: "Não foi possível copiar os detalhes.",
         variant: "destructive",
       });
     }
@@ -406,12 +429,12 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {log.errorMessage ? (
+                          {log.errorMessage || log.errorDetails ? (
                             <div className="flex items-center gap-2 max-w-[220px]">
-                              <span className="truncate text-xs text-red-600" title={log.errorMessage}>
-                                {log.errorMessage}
+                              <span className="truncate text-xs text-red-600" title={log.errorMessage || "Detalhes disponíveis"}>
+                                {log.errorMessage || "Detalhes disponíveis"}
                               </span>
-                              {log.errorDetails && (
+                              {(log.errorDetails || log.errorMessage) && (
                                 <Button
                                   variant="ghost"
                                   size="icon"
@@ -456,7 +479,15 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
           </CardContent>
         </Card>
       </div>
-      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+      <Dialog
+        open={!!selectedLog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedLog(null);
+            setCopiedDetails(false);
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Detalhes do Erro</DialogTitle>
@@ -471,8 +502,28 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                 {selectedLog?.errorMessage || "Sem mensagem de erro"}
               </div>
             </div>
-            <div className="space-y-1">
-              <span className="text-xs font-semibold uppercase text-muted-foreground">Detalhes técnicos</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase text-muted-foreground">Detalhes técnicos</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyDetails}
+                  disabled={!selectedLog?.errorDetails && !selectedLog?.errorMessage}
+                >
+                  {copiedDetails ? (
+                    <>
+                      <Check className="h-4 w-4 mr-2" />
+                      Copiado
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4 mr-2" />
+                      Copiar detalhes
+                    </>
+                  )}
+                </Button>
+              </div>
               <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap">
                 {selectedLog?.errorDetails || "Sem detalhes técnicos"}
               </pre>
