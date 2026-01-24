@@ -634,10 +634,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     
     result.success = false;
     result.message = `Erro ao verificar emails: ${errorMsg}`;
-    addError("monitor", errorMsg);
+    if (result.errors.length === 0) {
+      addError("monitor", errorMsg);
+    }
     
     // Atualizar log com erro
     const duration = Date.now() - startTime;
+    const errorDetails =
+      result.errors.length > 0
+        ? JSON.stringify(result.errors)
+        : JSON.stringify([{ stage: "monitor", message: errorMsg }]);
     await storage.updateEmailCheckLog(checkLog.id, {
       status: 'error',
       finishedAt: new Date(),
@@ -647,11 +653,11 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       xmlsProcessed: result.xmlsProcessed,
       xmlsDuplicated: result.xmlsDuplicated,
       errorMessage: errorMsg,
-      errorDetails: JSON.stringify(result.errors),
+      errorDetails,
     });
     
     return result;
-
+    
   } finally {
     // Fechar conexão
     if (connection) {

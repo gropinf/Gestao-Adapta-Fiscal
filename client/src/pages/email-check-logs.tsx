@@ -475,8 +475,11 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                                   {getStageLabel(parseErrorDetails(log.errorDetails)[0]?.stage)}
                                 </Badge>
                               )}
-                              <span className="truncate text-xs text-red-600" title={log.errorMessage || "Detalhes disponíveis"}>
-                                {log.errorMessage || "Sem detalhes"}
+                              <span
+                                className="truncate text-xs text-red-600"
+                                title={log.errorMessage || log.errorDetails || "Detalhes disponíveis"}
+                              >
+                                {log.errorMessage || (log.errorDetails ? "Detalhes disponíveis" : "Sem detalhes")}
                               </span>
                               <Button
                                 variant="ghost"
