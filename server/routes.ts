@@ -2355,6 +2355,74 @@ ${company.razaoSocial}
     }
   });
 
+  // Download event XML
+  app.get("/api/xml-events/:id/download", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const event = await storage.getXmlEvent(id);
+      if (!event) {
+        return res.status(404).json({ error: "Evento não encontrado" });
+      }
+
+      if (req.userRole !== "admin") {
+        const userCompanies = await storage.getCompaniesByUser(req.userId!);
+        const userCompanyIds = new Set(userCompanies.map((company) => company.id));
+        const userCnpjs = new Set(userCompanies.map((company) => company.cnpj));
+        let hasAccess = false;
+
+        if (event.companyId && userCompanyIds.has(event.companyId)) {
+          hasAccess = true;
+        }
+
+        if (!hasAccess && event.cnpj && userCnpjs.has(event.cnpj)) {
+          hasAccess = true;
+        }
+
+        if (!hasAccess && event.xmlId) {
+          const xml = await storage.getXml(event.xmlId);
+          if (
+            xml &&
+            (userCnpjs.has(xml.cnpjEmitente) ||
+              (xml.cnpjDestinatario && userCnpjs.has(xml.cnpjDestinatario)))
+          ) {
+            hasAccess = true;
+          }
+        }
+
+        if (!hasAccess) {
+          return res.status(403).json({
+            error: "Acesso negado",
+            message: "Você não tem permissão para acessar este evento",
+          });
+        }
+      }
+
+      const xmlPath = event.filepath;
+      try {
+        await fs.access(xmlPath);
+      } catch (error) {
+        console.error(`[EVENTO] ❌ Arquivo não encontrado: ${xmlPath}`, error);
+        return res.status(404).json({
+          error: "Arquivo não encontrado",
+          message: `O arquivo XML do evento não foi encontrado: ${xmlPath}`,
+        });
+      }
+
+      const rawFilename = `Evento-${event.tipoEvento}-${event.chaveNFe || event.id}.xml`;
+      const filename = rawFilename.replace(/[^a-zA-Z0-9._-]/g, "_");
+      res.setHeader("Content-Type", "application/xml");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.download(xmlPath, filename, (err) => {
+        if (err) {
+          console.error("[EVENTO] ❌ Erro ao enviar arquivo:", err);
+        }
+      });
+    } catch (error) {
+      console.error("Download event XML error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Get events by period (for email sending)
   app.get("/api/xml-events/period", authMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -3643,7 +3711,7 @@ ${company.razaoSocial}
   // XMLs Routes
   app.get("/api/xmls", authMiddleware, async (req: AuthRequest, res) => {
     try {
-      const { companyId, tipoDoc, categoria, statusValidacao, search, tipo, dataInicio, dataFim } = req.query;
+      const { companyId, tipoDoc, categoria, statusValidacao, search, tipo, dataInicio, dataFim, sortBy } = req.query;
 
       if (!companyId) {
         return res.status(400).json({ error: "Company ID is required" });
@@ -3683,6 +3751,7 @@ ${company.razaoSocial}
         search: search as string,
         dataInicio: dataInicioNormalizada,
         dataFim: dataFimNormalizada,
+        sortBy: (sortBy as "dataEmissao" | "numeroNota" | "chave" | "totalNota") || "dataEmissao",
       });
 
       // Aplicar filtro de tipo (EMIT ou DEST) se fornecido

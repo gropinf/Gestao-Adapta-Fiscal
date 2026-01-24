@@ -91,6 +91,7 @@ export default function Xmls() {
   const [categoria, setCategoria] = useState("all");
   const [statusValidacao, setStatusValidacao] = useState("all");
   const [tipoEmitDest, setTipoEmitDest] = useState("all"); // Filtro EMIT/DEST
+  const [sortBy, setSortBy] = useState<"dataEmissao" | "numeroNota" | "chave" | "totalNota">("dataEmissao");
   const [viewType, setViewType] = useState<"xmls" | "events">("xmls");
   const [eventTipo, setEventTipo] = useState("all");
   const [eventModelo, setEventModelo] = useState("all");
@@ -141,6 +142,7 @@ export default function Xmls() {
     search: string;
     dataInicio: string;
     dataFim: string;
+    sortBy: "dataEmissao" | "numeroNota" | "chave" | "totalNota";
   } | null>(null);
 
   // Busca XMLs da API
@@ -168,6 +170,7 @@ export default function Xmls() {
       if (appliedFilters.search) params.append("search", appliedFilters.search);
       if (appliedFilters.dataInicio) params.append("dataInicio", appliedFilters.dataInicio);
       if (appliedFilters.dataFim) params.append("dataFim", appliedFilters.dataFim);
+      if (appliedFilters.sortBy) params.append("sortBy", appliedFilters.sortBy);
 
       const res = await fetch(`/api/xmls?${params.toString()}`, {
         headers: getAuthHeader(),
@@ -296,6 +299,7 @@ export default function Xmls() {
       search: searchTerm,
       dataInicio: dataInicial,
       dataFim: dataFinal,
+      sortBy,
     };
     setAppliedFilters(nextFilters);
     setCurrentPage(1); // Reset para primeira página ao filtrar
@@ -554,6 +558,41 @@ export default function Xmls() {
     }
   };
 
+  const handleDownloadEventXml = async (eventId: string) => {
+    try {
+      const res = await fetch(`/api/xml-events/${eventId}/download`, {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || "Erro ao baixar XML do evento");
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Evento-${eventId}.xml`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast({
+        title: "Download iniciado",
+        description: "O XML do evento está sendo baixado",
+      });
+    } catch (error) {
+      toast({
+        title: "Erro no download",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleDownloadDanfe = async (chave: string) => {
     try {
       toast({
@@ -609,6 +648,7 @@ export default function Xmls() {
       search: string;
       dataInicio: string;
       dataFim: string;
+      sortBy: "dataEmissao" | "numeroNota" | "chave" | "totalNota";
     } | null,
     page: number,
     selection: Set<string>,
@@ -625,6 +665,7 @@ export default function Xmls() {
     params.set("search", filters.search);
     params.set("dataInicio", filters.dataInicio);
     params.set("dataFim", filters.dataFim);
+    params.set("sortBy", filters.sortBy);
     params.set("page", String(page));
     if (selection.size > 0) {
       params.set("selected", Array.from(selection).join(","));
@@ -669,6 +710,7 @@ export default function Xmls() {
       search: params.get("search") || "",
       dataInicio: params.get("dataInicio") || defaults.dataInicial,
       dataFim: params.get("dataFim") || defaults.dataFinal,
+      sortBy: (params.get("sortBy") as "dataEmissao" | "numeroNota" | "chave" | "totalNota") || "dataEmissao",
     };
 
     setViewType(nextFilters.view);
@@ -681,6 +723,7 @@ export default function Xmls() {
     setSearchTerm(nextFilters.search);
     setDataInicial(nextFilters.dataInicio);
     setDataFinal(nextFilters.dataFim);
+    setSortBy(nextFilters.sortBy);
     setAppliedFilters(nextFilters);
     setCurrentPage(Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage);
     setSelectedXmlIds(parsedSelection);
@@ -738,7 +781,7 @@ export default function Xmls() {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
-                    placeholder={viewType === "xmls" ? "Buscar por chave ou destinatário..." : "Buscar por chave, protocolo ou intervalo..."}
+                    placeholder={viewType === "xmls" ? "Buscar por chave, destinatário ou número..." : "Buscar por chave, protocolo ou intervalo..."}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10 h-11"
@@ -746,6 +789,22 @@ export default function Xmls() {
                   />
                 </div>
               </div>
+              {viewType === "xmls" && (
+                <div className="space-y-2">
+                  <Label className="text-sm">Ordenação</Label>
+                  <Select value={sortBy} onValueChange={(value) => setSortBy(value as typeof sortBy)}>
+                    <SelectTrigger className="w-[200px] h-11">
+                      <SelectValue placeholder="Ordenar por" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="dataEmissao">Data de emissão</SelectItem>
+                      <SelectItem value="numeroNota">Número da nota</SelectItem>
+                      <SelectItem value="chave">Chave</SelectItem>
+                      <SelectItem value="totalNota">Total da nota</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label className="text-sm">Tipo</Label>
                 <Select value={viewType} onValueChange={(value) => {
@@ -1189,6 +1248,9 @@ export default function Xmls() {
                           <th className="px-6 py-4 text-left text-sm font-semibold">
                             Observação
                           </th>
+                          <th className="px-6 py-4 text-right text-sm font-semibold">
+                            Ações
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1218,6 +1280,18 @@ export default function Xmls() {
                             </td>
                             <td className="px-6 py-4 text-sm text-muted-foreground">
                               {event.justificativa || event.correcao || "—"}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex justify-end">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDownloadEventXml(event.id)}
+                                  title="Baixar XML do evento"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

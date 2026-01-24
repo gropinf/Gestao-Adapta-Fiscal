@@ -49,7 +49,7 @@ import {
   type InsertEmailCheckLog,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, like, or, gte, lte, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, like, or, gte, lte, sql, isNull, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -103,6 +103,7 @@ export interface IStorage {
   createXmlEvent(event: InsertXmlEvent): Promise<XmlEvent>;
   getXmlEventsByChave(chaveNFe: string): Promise<XmlEvent[]>;
   getXmlEventsByXmlId(xmlId: string): Promise<XmlEvent[]>;
+  getXmlEvent(id: string): Promise<XmlEvent | undefined>;
   getXmlEventsByCompany(companyId: string): Promise<XmlEvent[]>;
   getXmlEventsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<XmlEvent[]>;
   getDuplicateXmlEventForEvento(input: {
@@ -213,6 +214,7 @@ export interface XmlFilters {
   dataInicio?: string;
   dataFim?: string;
   search?: string;
+  sortBy?: "dataEmissao" | "numeroNota" | "chave" | "totalNota";
 }
 
 export class DatabaseStorage implements IStorage {
@@ -533,14 +535,32 @@ export class DatabaseStorage implements IStorage {
       conditions.push(
         or(
           like(xmls.chave, `%${filters.search}%`),
+          like(xmls.numeroNota, `%${filters.search}%`),
           like(xmls.cnpjEmitente, `%${filters.search}%`),
-          like(xmls.cnpjDestinatario, `%${filters.search}%`)
+          like(xmls.cnpjDestinatario, `%${filters.search}%`),
+          like(xmls.razaoSocialDestinatario, `%${filters.search}%`)
         )
       );
     }
 
     const query = db.select().from(xmls).where(and(...conditions));
-    return query.orderBy(desc(xmls.dataEmissao));
+    const sortBy = filters?.sortBy || "dataEmissao";
+    if (sortBy === "numeroNota") {
+      return query.orderBy(
+        asc(sql`NULLIF(${xmls.numeroNota}, '')::BIGINT`),
+        asc(xmls.dataEmissao)
+      );
+    }
+    if (sortBy === "chave") {
+      return query.orderBy(asc(xmls.chave));
+    }
+    if (sortBy === "totalNota") {
+      return query.orderBy(
+        desc(sql`CAST(${xmls.totalNota} AS DECIMAL)`),
+        desc(xmls.dataEmissao)
+      );
+    }
+    return query.orderBy(desc(xmls.dataEmissao), desc(xmls.hora));
   }
 
   async getXmlsByCnpj(cnpj: string, filters?: XmlFilters): Promise<Xml[]> {
@@ -580,14 +600,32 @@ export class DatabaseStorage implements IStorage {
       conditions.push(
         or(
           like(xmls.chave, `%${filters.search}%`),
+          like(xmls.numeroNota, `%${filters.search}%`),
           like(xmls.cnpjEmitente, `%${filters.search}%`),
-          like(xmls.cnpjDestinatario, `%${filters.search}%`)
+          like(xmls.cnpjDestinatario, `%${filters.search}%`),
+          like(xmls.razaoSocialDestinatario, `%${filters.search}%`)
         )
       );
     }
 
     const query = db.select().from(xmls).where(and(...conditions));
-    return query.orderBy(desc(xmls.dataEmissao));
+    const sortBy = filters?.sortBy || "dataEmissao";
+    if (sortBy === "numeroNota") {
+      return query.orderBy(
+        asc(sql`NULLIF(${xmls.numeroNota}, '')::BIGINT`),
+        asc(xmls.dataEmissao)
+      );
+    }
+    if (sortBy === "chave") {
+      return query.orderBy(asc(xmls.chave));
+    }
+    if (sortBy === "totalNota") {
+      return query.orderBy(
+        desc(sql`CAST(${xmls.totalNota} AS DECIMAL)`),
+        desc(xmls.dataEmissao)
+      );
+    }
+    return query.orderBy(desc(xmls.dataEmissao), desc(xmls.hora));
   }
 
   async createXml(insertXml: InsertXml): Promise<Xml> {
@@ -1050,6 +1088,11 @@ export class DatabaseStorage implements IStorage {
       .from(xmlEvents)
       .where(eq(xmlEvents.xmlId, xmlId))
       .orderBy(desc(xmlEvents.dataEvento), desc(xmlEvents.numeroSequencia));
+  }
+
+  async getXmlEvent(id: string): Promise<XmlEvent | undefined> {
+    const [event] = await db.select().from(xmlEvents).where(eq(xmlEvents.id, id));
+    return event || undefined;
   }
 
   async getXmlEventsByCompany(companyId: string): Promise<XmlEvent[]> {
