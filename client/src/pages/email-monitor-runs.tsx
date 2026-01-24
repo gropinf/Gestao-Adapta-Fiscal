@@ -14,10 +14,17 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Timer, PlayCircle } from "lucide-react";
+import { Loader2, Timer, PlayCircle, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface MonitorRunLog {
   id: string;
@@ -35,12 +42,27 @@ type RunDetails = {
   skipped?: number;
   successful?: number;
   failed?: number;
+  failures?: Array<{
+    monitorId?: string;
+    email?: string;
+    success?: boolean;
+    message?: string;
+    errors?: Array<{
+      stage?: string;
+      message?: string;
+      emailUid?: number;
+      filename?: string;
+    }>;
+  }>;
+  error?: string;
+  stack?: string;
 };
 
 export default function EmailMonitorRuns() {
   const { user } = useAuthStore();
   const [filterDateFrom, setFilterDateFrom] = useState<string>("");
   const [filterDateTo, setFilterDateTo] = useState<string>("");
+  const [selectedRun, setSelectedRun] = useState<MonitorRunLog | null>(null);
 
   const { data: runs = [], isLoading } = useQuery<MonitorRunLog[]>({
     queryKey: ["email-monitor-runs", filterDateFrom, filterDateTo],
@@ -73,6 +95,13 @@ export default function EmailMonitorRuns() {
     } catch {
       return {};
     }
+  };
+
+  const hasDetails = (details?: RunDetails) => {
+    if (!details) return false;
+    if (details.error || details.stack) return true;
+    if (details.failures && details.failures.length > 0) return true;
+    return false;
   };
 
   return (
@@ -153,6 +182,7 @@ export default function EmailMonitorRuns() {
                       <TableHead className="text-center">Pulados</TableHead>
                       <TableHead className="text-center">Sucesso</TableHead>
                       <TableHead className="text-center">Falhas</TableHead>
+                      <TableHead className="text-right">Detalhes</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -188,6 +218,17 @@ export default function EmailMonitorRuns() {
                           <TableCell className="text-center text-sm text-red-600">
                             {details.failed ?? 0}
                           </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setSelectedRun(run)}
+                              disabled={!hasDetails(details)}
+                              title={hasDetails(details) ? "Ver detalhes" : "Sem detalhes"}
+                            >
+                              <Info className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       );
                     })}
@@ -198,6 +239,69 @@ export default function EmailMonitorRuns() {
           </CardContent>
         </Card>
       </div>
+      <Dialog
+        open={!!selectedRun}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedRun(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Detalhes da Execução</DialogTitle>
+            <DialogDescription>
+              {selectedRun?.userName || selectedRun?.userEmail || selectedRun?.userId} •{" "}
+              {selectedRun ? formatDateTime(selectedRun.createdAt) : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            {selectedRun ? (
+              (() => {
+                const details = parseDetails(selectedRun.details);
+                if (!hasDetails(details)) {
+                  return (
+                    <div className="rounded-md border bg-muted/40 p-3 text-muted-foreground">
+                      Sem detalhes disponíveis.
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    {details.error && (
+                      <div className="rounded-md border bg-red-50 p-3 text-red-700">
+                        {details.error}
+                      </div>
+                    )}
+                    {details.failures && details.failures.length > 0 && (
+                      <div className="space-y-2 rounded-md border bg-muted/40 p-3">
+                        {details.failures.map((failure, index) => (
+                          <div key={`${failure.monitorId}-${index}`} className="text-xs">
+                            <div className="font-semibold text-red-700">
+                              {failure.email || failure.monitorId || "Monitor"}: {failure.message || "Falha"}
+                            </div>
+                            {failure.errors && failure.errors.length > 0 && (
+                              <div className="text-muted-foreground">
+                                {failure.errors[0]?.stage ? `${failure.errors[0].stage}: ` : ""}
+                                {failure.errors[0]?.message || "Erro"}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {details.stack && (
+                      <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 whitespace-pre-wrap text-xs">
+                        {details.stack}
+                      </pre>
+                    )}
+                  </>
+                );
+              })()
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

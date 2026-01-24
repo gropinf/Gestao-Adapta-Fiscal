@@ -65,7 +65,7 @@ function generateZipFilename(company: Company, periodStart: string, periodEnd: s
   const dtInicio = formatDateFilename(periodStart);
   const dtFim = formatDateFilename(periodEnd);
   const razaoSocial = sanitizeFilename(company.razaoSocial);
-  
+
   return `xml_${cnpj}_${dtInicio}_${dtFim}_${razaoSocial}.zip`;
 }
 
@@ -421,7 +421,7 @@ export async function sendXmlsByEmail(
     });
 
     const events = [...otherEvents, ...inutEvents];
-    
+
     if (xmls.length === 0 && events.length === 0) {
       throw new Error("Nenhum XML ou evento encontrado para o período informado");
     }

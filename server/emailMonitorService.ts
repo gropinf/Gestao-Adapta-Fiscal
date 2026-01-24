@@ -11,6 +11,8 @@ import type { EmailMonitor } from '@shared/schema';
 interface CheckResult {
   success: boolean;
   message: string;
+  monitorId?: string;
+  monitorEmail?: string;
   emailsChecked: number;
   xmlsFound: number;
   xmlsProcessed: number;
@@ -32,6 +34,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
   const result: CheckResult = {
     success: false,
     message: '',
+    monitorId: monitor.id,
+    monitorEmail: monitor.email,
     emailsChecked: 0,
     xmlsFound: 0,
     xmlsProcessed: 0,

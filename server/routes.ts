@@ -3029,6 +3029,15 @@ ${company.razaoSocial}
     try {
       const result = await checkAllActiveMonitors(req.user!.id, "manual");
 
+      const failures = result.results
+        .filter((item) => !item.success || item.errors.length > 0)
+        .map((item) => ({
+          monitorId: item.monitorId,
+          email: item.monitorEmail,
+          success: item.success,
+          message: item.message,
+          errors: item.errors,
+        }));
       await storage.logAction({
         userId: req.user!.id,
         action: "email_monitor_run_now",
@@ -3038,6 +3047,7 @@ ${company.razaoSocial}
           skipped: result.skipped,
           successful: result.successful,
           failed: result.failed,
+          failures,
         }),
       });
 

@@ -80,6 +80,15 @@ app.use((req, res, next) => {
       }
 
       const result = await checkAllActiveMonitors(adminUserId, "cron");
+      const failures = result.results
+        .filter((item) => !item.success || item.errors.length > 0)
+        .map((item) => ({
+          monitorId: item.monitorId,
+          email: item.monitorEmail,
+          success: item.success,
+          message: item.message,
+          errors: item.errors,
+        }));
       await storage.logAction({
         userId: adminUserId,
         action: "email_monitor_schedule_run",
@@ -89,10 +98,27 @@ app.use((req, res, next) => {
           skipped: result.skipped,
           successful: result.successful,
           failed: result.failed,
+          failures,
         }),
       });
     } catch (error) {
       console.error("[IMAP Monitor] Erro na execução automática:", error);
+      try {
+        const admins = await storage.getUsersByRole("admin");
+        const adminUserId = admins[0]?.id;
+        if (adminUserId) {
+          await storage.logAction({
+            userId: adminUserId,
+            action: "email_monitor_schedule_run",
+            details: JSON.stringify({
+              error: error instanceof Error ? error.message : "Erro desconhecido",
+              stack: error instanceof Error ? error.stack : undefined,
+            }),
+          });
+        }
+      } catch (logError) {
+        console.error("[IMAP Monitor] Falha ao registrar erro do agendamento:", logError);
+      }
     } finally {
       isEmailMonitorRunning = false;
     }
