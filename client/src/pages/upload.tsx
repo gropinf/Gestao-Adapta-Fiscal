@@ -182,6 +182,24 @@ export default function Upload() {
         result.errors?.map((e: any) => [e.filename, e]) || []
       );
 
+      const archiveStats = new Map<string, { success: number; errors: number }>();
+      for (const item of result.success || []) {
+        if (typeof item.filename === "string" && item.filename.includes("::")) {
+          const archiveName = item.filename.split("::")[0];
+          const stats = archiveStats.get(archiveName) || { success: 0, errors: 0 };
+          stats.success += 1;
+          archiveStats.set(archiveName, stats);
+        }
+      }
+      for (const item of result.errors || []) {
+        if (typeof item.filename === "string" && item.filename.includes("::")) {
+          const archiveName = item.filename.split("::")[0];
+          const stats = archiveStats.get(archiveName) || { success: 0, errors: 0 };
+          stats.errors += 1;
+          archiveStats.set(archiveName, stats);
+        }
+      }
+
       setUploadedFiles((prev) =>
         prev.map((uploadedFile) => {
           const filename = uploadedFile.file.name;
@@ -209,6 +227,25 @@ export default function Upload() {
             };
           }
           
+          const archiveResult = archiveStats.get(filename);
+          if (archiveResult) {
+            if (archiveResult.success > 0) {
+              return {
+                ...uploadedFile,
+                status: "success" as const,
+                progress: 100,
+              };
+            }
+            if (archiveResult.errors > 0) {
+              return {
+                ...uploadedFile,
+                status: "error" as const,
+                progress: 0,
+                error: `${archiveResult.errors} XML(s) com erro no arquivo compactado`,
+              };
+            }
+          }
+
           return uploadedFile;
         })
       );

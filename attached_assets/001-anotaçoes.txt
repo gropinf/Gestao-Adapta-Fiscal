@@ -7,7 +7,15 @@ IMAP_MAX_EMAILS_PER_RUN=
 100   # limite por execução
 IMAP_SUBJECT_FILTER=xml       # filtro de assunto (mantido)
 IMAP_SEARCH_TIMEOUT_MS=60000  # timeout da busca
-
+===================
+dados email aws criado em 23/01/2026
+xml@caixafacil.awsapps.com
+senha: (vUr'GKidCfsi9A#
+dados de receber: imap.mail.us-east-1.awsapps.com 993 ssl/tls
+dados de enviar: smtp.mail.us-east-1.awsapps.com 465 SMTP_ENABLE_SSL=true
+organização = caixafacil.awsapps.com
+https://caixafacil.awsapps.com/mail 
+===========
 
 link enviar cliente e ou contabilidade
 https://SEU-DOMINIO.com/public/cadastro-empresa

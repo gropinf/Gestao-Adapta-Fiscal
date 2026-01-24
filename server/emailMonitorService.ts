@@ -282,6 +282,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       }
     };
 
+    const ensureConnection = async () => {
+      if (connection) {
+        return;
+      }
+      console.log(`[IMAP Monitor] 🔌 Reabrindo conexão com ${monitor.host}:${monitor.port}...`);
+      connection = await imapSimple.connect(config);
+      await connection.openBox('INBOX');
+      console.log(`[IMAP Monitor] ✅ Conexão reaberta e INBOX pronta`);
+    };
+
     // 2. Conectar ao servidor IMAP
     console.log(`[IMAP Monitor] 🔌 Conectando a ${monitor.host}:${monitor.port}...`);
     connection = await imapSimple.connect(config);
@@ -407,8 +417,42 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           continue;
         }
 
+        const relevantAttachments = parsed.attachments.filter((attachment) => {
+          const filename = attachment.filename?.toLowerCase() || '';
+          const contentType = attachment.contentType?.toLowerCase() || '';
+          return (
+            filename.endsWith('.xml') ||
+            filename.endsWith('.zip') ||
+            contentType === "application/zip" ||
+            contentType === "application/x-zip-compressed"
+          );
+        });
+
+        const shouldCloseForProcessing =
+          parsed.attachments.length > 1 ||
+          relevantAttachments.some((attachment) => {
+            const filename = attachment.filename?.toLowerCase() || '';
+            const contentType = attachment.contentType?.toLowerCase() || '';
+            return (
+              filename.endsWith('.zip') ||
+              contentType === "application/zip" ||
+              contentType === "application/x-zip-compressed"
+            );
+          });
+
+        if (shouldCloseForProcessing && connection) {
+          try {
+            connection.end();
+          } catch (e) {
+            console.warn(`[IMAP Monitor] ⚠️ Erro ao fechar conexão antes de processar:`, e);
+          } finally {
+            connection = null;
+            console.log(`[IMAP Monitor] 🔌 Conexão fechada para processar anexos`);
+          }
+        }
+
         // 7. Processar anexos XML
-        for (const attachment of parsed.attachments) {
+        for (const attachment of relevantAttachments) {
           const filename = attachment.filename?.toLowerCase() || '';
           const contentType = attachment.contentType?.toLowerCase() || '';
           const isXmlAttachment = filename.endsWith('.xml');
@@ -503,6 +547,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
           if (shouldDeleteEmail) {
             try {
+              await ensureConnection();
               await connection.addFlags(emailUid, '\\Deleted');
               if (connection.imap?.expunge) {
                 await new Promise<void>((resolve, reject) => {
