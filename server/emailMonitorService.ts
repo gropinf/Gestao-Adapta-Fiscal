@@ -51,9 +51,11 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     });
   };
 
+  let logUpdated = false;
   const updateCheckLogSafe = async (data: Partial<Omit<EmailCheckLog, "id" | "createdAt">>) => {
     try {
       await storage.updateEmailCheckLog(checkLog.id, data);
+      logUpdated = true;
     } catch (logError) {
       console.error("[IMAP Monitor] ⚠️ Falha ao atualizar log:", logError);
     }
@@ -681,6 +683,25 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     return result;
     
   } finally {
+    if (!logUpdated) {
+      const duration = Date.now() - startTime;
+      const fallbackMessage = result.message || "Erro desconhecido";
+      const fallbackDetails =
+        result.errors.length > 0
+          ? JSON.stringify(result.errors)
+          : JSON.stringify([{ stage: "monitor", message: fallbackMessage }]);
+      await updateCheckLogSafe({
+        status: result.success ? 'success' : 'error',
+        finishedAt: new Date(),
+        durationMs: duration,
+        emailsChecked: result.emailsChecked,
+        xmlsFound: result.xmlsFound,
+        xmlsProcessed: result.xmlsProcessed,
+        xmlsDuplicated: result.xmlsDuplicated,
+        errorMessage: result.success ? null : fallbackMessage,
+        errorDetails: result.success ? null : fallbackDetails,
+      });
+    }
     // Fechar conexão
     if (connection) {
       try {
