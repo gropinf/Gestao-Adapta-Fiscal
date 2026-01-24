@@ -51,6 +51,14 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     });
   };
 
+  const updateCheckLogSafe = async (data: Partial<Omit<EmailCheckLog, "id" | "createdAt">>) => {
+    try {
+      await storage.updateEmailCheckLog(checkLog.id, data);
+    } catch (logError) {
+      console.error("[IMAP Monitor] ⚠️ Falha ao atualizar log:", logError);
+    }
+  };
+
   const processXmlContent = async (xmlContent: string, filename: string, emailUid?: number) => {
     let hadError = false;
     let processed = false;
@@ -298,12 +306,24 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
     // 2. Conectar ao servidor IMAP
     console.log(`[IMAP Monitor] 🔌 Conectando a ${monitor.host}:${monitor.port}...`);
-    connection = await imapSimple.connect(config);
-    console.log(`[IMAP Monitor] ✅ Conectado com sucesso!`);
+    try {
+      connection = await imapSimple.connect(config);
+      console.log(`[IMAP Monitor] ✅ Conectado com sucesso!`);
+    } catch (connectError) {
+      const errorMsg = connectError instanceof Error ? connectError.message : "Erro ao conectar IMAP";
+      addError("imap-connect", errorMsg);
+      throw connectError;
+    }
 
     // 3. Abrir caixa de entrada
-    await connection.openBox('INBOX');
-    console.log(`[IMAP Monitor] 📬 Caixa INBOX aberta`);
+    try {
+      await connection.openBox('INBOX');
+      console.log(`[IMAP Monitor] 📬 Caixa INBOX aberta`);
+    } catch (openError) {
+      const errorMsg = openError instanceof Error ? openError.message : "Erro ao abrir INBOX";
+      addError("imap-openbox", errorMsg);
+      throw openError;
+    }
 
     // 4. Construir critérios de busca (sem filtros)
     const searchTimeoutMs = Number(process.env.IMAP_SEARCH_TIMEOUT_MS || 30000);
@@ -378,7 +398,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       result.message = 'Nenhum email novo encontrado';
 
       const duration = Date.now() - startTime;
-      await storage.updateEmailCheckLog(checkLog.id, {
+      await updateCheckLogSafe({
         status: 'success',
         finishedAt: new Date(),
         durationMs: duration,
@@ -571,7 +591,9 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
               }
               console.log(`[IMAP Monitor] 🗑️ Email UID ${emailUid} deletado após processamento`);
             } catch (deleteError) {
+              const errorMsg = deleteError instanceof Error ? deleteError.message : "Erro ao deletar email";
               console.warn(`[IMAP Monitor] ⚠️ Falha ao deletar email UID ${emailUid}:`, deleteError);
+              addError("imap-delete", errorMsg, { emailUid });
             }
           }
         }
@@ -614,7 +636,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     }
 
     // Atualizar log com sucesso
-    await storage.updateEmailCheckLog(checkLog.id, {
+    await updateCheckLogSafe({
       status: 'success',
       finishedAt: new Date(),
       durationMs: duration,
@@ -644,7 +666,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       result.errors.length > 0
         ? JSON.stringify(result.errors)
         : JSON.stringify([{ stage: "monitor", message: errorMsg }]);
-    await storage.updateEmailCheckLog(checkLog.id, {
+    await updateCheckLogSafe({
       status: 'error',
       finishedAt: new Date(),
       durationMs: duration,
