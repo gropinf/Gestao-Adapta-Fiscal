@@ -15,6 +15,7 @@ import {
   userAccessLogs,
   xmlEmailHistory,
   emailCheckLogs,
+  emailMonitorSeenUids,
   type User,
   type InsertUser,
   type Company,
@@ -32,6 +33,8 @@ import {
   type InsertAlert,
   type EmailMonitor,
   type InsertEmailMonitor,
+  type EmailMonitorSeenUid,
+  type InsertEmailMonitorSeenUid,
   type EmailMonitorScheduleSettings,
   type InsertEmailMonitorScheduleSettings,
   type EmailGlobalSettings,
@@ -157,6 +160,8 @@ export interface IStorage {
   updateEmailMonitor(id: string, monitor: Partial<InsertEmailMonitor>): Promise<EmailMonitor | undefined>;
   deleteEmailMonitor(id: string): Promise<void>;
   updateEmailMonitorLastCheck(id: string): Promise<void>;
+  getEmailMonitorSeenUids(emailMonitorId: string): Promise<EmailMonitorSeenUid[]>;
+  addEmailMonitorSeenUid(entry: InsertEmailMonitorSeenUid): Promise<EmailMonitorSeenUid | undefined>;
 
   // Email monitor schedule settings
   getEmailMonitorScheduleSettings(): Promise<EmailMonitorScheduleSettings | undefined>;
@@ -776,6 +781,22 @@ export class DatabaseStorage implements IStorage {
       .update(emailMonitors)
       .set({ lastCheckedAt: new Date() })
       .where(eq(emailMonitors.id, id));
+  }
+
+  async getEmailMonitorSeenUids(emailMonitorId: string): Promise<EmailMonitorSeenUid[]> {
+    return await db
+      .select()
+      .from(emailMonitorSeenUids)
+      .where(eq(emailMonitorSeenUids.emailMonitorId, emailMonitorId));
+  }
+
+  async addEmailMonitorSeenUid(entry: InsertEmailMonitorSeenUid): Promise<EmailMonitorSeenUid | undefined> {
+    const [created] = await db
+      .insert(emailMonitorSeenUids)
+      .values(entry)
+      .onConflictDoNothing()
+      .returning();
+    return created || undefined;
   }
 
   async getEmailMonitorScheduleSettings(): Promise<EmailMonitorScheduleSettings | undefined> {

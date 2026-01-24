@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { getAuthHeader } from "@/lib/auth";
+import { getAuthHeader, useAuthStore } from "@/lib/auth";
 import {
   Table,
   TableBody,
@@ -62,6 +62,8 @@ interface ScheduleSettings {
 export function EmailMonitorList() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const isAdminUser = user?.role === "admin";
   
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -253,6 +255,14 @@ export function EmailMonitorList() {
 
   // Test connection
   const handleTestConnection = async (id: string) => {
+    if (!isAdminUser) {
+      toast({
+        title: "Acesso negado",
+        description: "Apenas administradores podem testar conexão",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsTesting(id);
     try {
       const res = await fetch(`/api/email-monitors/${id}/test`, {
@@ -286,6 +296,14 @@ export function EmailMonitorList() {
 
   // Check emails now (manual verification)
   const handleCheckNow = async (id: string, email: string) => {
+    if (!isAdminUser) {
+      toast({
+        title: "Acesso negado",
+        description: "Apenas administradores podem verificar emails",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsChecking(id);
     try {
       const res = await fetch(`/api/email-monitors/${id}/check`, {
@@ -324,7 +342,19 @@ export function EmailMonitorList() {
   };
 
   const handleCheckAllNow = async () => {
+    if (!isAdminUser) {
+      toast({
+        title: "Acesso negado",
+        description: "Apenas administradores podem rodar a verificação geral",
+        variant: "destructive",
+      });
+      return;
+    }
     setIsCheckingAll(true);
+    toast({
+      title: "Verificação iniciada",
+      description: "Rodando todos os monitores ativos...",
+    });
     try {
       const res = await fetch(`/api/email-monitors/run-now`, {
         method: "POST",

@@ -264,7 +264,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
   try {
     console.log(`\n[IMAP Monitor] 📧 Iniciando verificação do monitor: ${monitor.email}`);
-    console.log(`[IMAP Monitor] 📅 Monitorar desde: ${monitor.monitorSince || 'Todos os emails'}`);
+    console.log(`[IMAP Monitor] 📅 Monitorar todos os emails (sem filtros)`);
 
     // 1. Configurar conexão IMAP
     const authTimeout = Number(process.env.IMAP_AUTH_TIMEOUT_MS || 30000);
@@ -301,8 +301,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     await connection.openBox('INBOX');
     console.log(`[IMAP Monitor] 📬 Caixa INBOX aberta`);
 
-    // 4. Construir critérios de busca (paginado por UID)
-    const subjectFilter = (process.env.IMAP_SUBJECT_FILTER || "xml").trim();
+    // 4. Construir critérios de busca (sem filtros)
     const searchTimeoutMs = Number(process.env.IMAP_SEARCH_TIMEOUT_MS || 30000);
     const batchSize = Number(
       process.env.IMAP_MAX_EMAILS_PER_RUN ||
@@ -311,24 +310,6 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     );
 
     const searchCriteria: any[] = ['ALL'];
-    if (monitor.monitorSince) {
-      const sinceDate = new Date(monitor.monitorSince);
-      searchCriteria.push(['SINCE', sinceDate]);
-      console.log(`[IMAP Monitor] 📅 Filtrando emails desde: ${sinceDate.toISOString()}`);
-    }
-
-    if (monitor.lastEmailId) {
-      const lastUid = parseInt(monitor.lastEmailId);
-      if (!Number.isNaN(lastUid)) {
-        searchCriteria.push(['UID', `${lastUid + 1}:*`]);
-        console.log(`[IMAP Monitor] 🔁 Buscando a partir do UID ${lastUid + 1}`);
-      }
-    }
-
-    if (subjectFilter) {
-      searchCriteria.push(['SUBJECT', subjectFilter]);
-      console.log(`[IMAP Monitor] 🔎 Filtro por assunto: "${subjectFilter}"`);
-    }
 
     // Buscar apenas emails com anexos (filtramos após o download)
     const fetchOptions = {
@@ -368,6 +349,26 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     result.emailsChecked = messages.length;
     console.log(`[IMAP Monitor] 📨 Encontrados ${messages.length} email(s) no total`);
 
+    const seenUids = await storage.getEmailMonitorSeenUids(monitor.id);
+    const seenUidSet = new Set(seenUids.map((item) => item.emailUid));
+
+    const markSeenUid = async (emailUid: number, reason: string) => {
+      try {
+        const uidStr = emailUid.toString();
+        if (seenUidSet.has(uidStr)) {
+          return;
+        }
+        await storage.addEmailMonitorSeenUid({
+          emailMonitorId: monitor.id,
+          emailUid: uidStr,
+          reason,
+        });
+        seenUidSet.add(uidStr);
+      } catch (error) {
+        console.warn(`[IMAP Monitor] ⚠️ Falha ao registrar UID ${emailUid} (${reason}):`, error);
+      }
+    };
+
     if (messages.length === 0) {
       result.success = true;
       result.message = 'Nenhum email novo encontrado';
@@ -398,9 +399,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       try {
         emailUid = message.attributes.uid;
         
-        // Verificar se já processamos este email
-        if (monitor.lastEmailId && emailUid <= parseInt(monitor.lastEmailId)) {
-          console.log(`[IMAP Monitor] ⏭️ Email UID ${emailUid} já processado, pulando...`);
+        if (emailUid && seenUidSet.has(emailUid.toString())) {
+          console.log(`[IMAP Monitor] ⏭️ Email UID ${emailUid} já registrado, pulando...`);
           continue;
         }
 
@@ -414,6 +414,9 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         
         // Verificar se tem anexos
         if (!parsed.attachments || parsed.attachments.length === 0) {
+          if (emailUid) {
+            await markSeenUid(emailUid, "no_xml");
+          }
           continue;
         }
 
@@ -427,6 +430,13 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             contentType === "application/x-zip-compressed"
           );
         });
+
+        if (relevantAttachments.length === 0) {
+          if (emailUid) {
+            await markSeenUid(emailUid, "no_xml");
+          }
+          continue;
+        }
 
         const shouldCloseForProcessing =
           parsed.attachments.length > 1 ||
@@ -536,11 +546,6 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           }
         }
 
-        // Atualizar last_email_id para este UID
-        await storage.updateEmailMonitor(monitor.id, {
-          lastEmailId: emailUid.toString(),
-        });
-
         if (monitor.deleteAfterProcess && emailUid) {
           const shouldDeleteEmail =
             !emailHadErrors && emailXmlsFound > 0 && (emailXmlsProcessed > 0 || emailXmlsDuplicated > 0);
@@ -564,6 +569,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             } catch (deleteError) {
               console.warn(`[IMAP Monitor] ⚠️ Falha ao deletar email UID ${emailUid}:`, deleteError);
             }
+          }
+        }
+
+        if (!monitor.deleteAfterProcess && emailUid) {
+          const shouldMarkSeen =
+            !emailHadErrors && emailXmlsFound > 0 && (emailXmlsProcessed > 0 || emailXmlsDuplicated > 0);
+
+          if (shouldMarkSeen) {
+            const reason = emailXmlsProcessed > 0 ? "processed_no_delete" : "duplicate_xml";
+            await markSeenUid(emailUid, reason);
           }
         }
 

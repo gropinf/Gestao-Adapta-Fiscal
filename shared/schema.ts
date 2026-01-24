@@ -179,6 +179,17 @@ export const emailMonitors = pgTable("email_monitors", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Email Monitor Seen UIDs - UIDs já processados/ignorados
+export const emailMonitorSeenUids = pgTable("email_monitor_seen_uids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  emailMonitorId: varchar("email_monitor_id")
+    .notNull()
+    .references(() => emailMonitors.id, { onDelete: "cascade" }),
+  emailUid: text("email_uid").notNull(),
+  reason: text("reason").notNull(), // processed_no_delete, no_xml, duplicate_xml
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Email monitor schedule settings (global)
 export const emailMonitorScheduleSettings = pgTable("email_monitor_schedule_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -431,6 +442,11 @@ export const insertEmailMonitorSchema = createInsertSchema(emailMonitors).omit({
   updatedAt: true,
 });
 
+export const insertEmailMonitorSeenUidSchema = createInsertSchema(emailMonitorSeenUids).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertEmailMonitorScheduleSettingsSchema = createInsertSchema(emailMonitorScheduleSettings).omit({
   id: true,
   updatedAt: true,
@@ -492,6 +508,9 @@ export type InsertAlert = z.infer<typeof insertAlertSchema>;
 
 export type EmailMonitor = typeof emailMonitors.$inferSelect;
 export type InsertEmailMonitor = z.infer<typeof insertEmailMonitorSchema>;
+
+export type EmailMonitorSeenUid = typeof emailMonitorSeenUids.$inferSelect;
+export type InsertEmailMonitorSeenUid = z.infer<typeof insertEmailMonitorSeenUidSchema>;
 
 export type EmailMonitorScheduleSettings = typeof emailMonitorScheduleSettings.$inferSelect;
 export type InsertEmailMonitorScheduleSettings = z.infer<typeof insertEmailMonitorScheduleSettingsSchema>;
