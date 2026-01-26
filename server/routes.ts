@@ -2822,9 +2822,6 @@ ${company.razaoSocial}
       if (!companyId || !modelo || !serie || !numeroInicial || !numeroFinal || !justificativa) {
         return res.status(400).json({ error: "Campos obrigatórios não informados" });
       }
-      if (!certFile || !certPassword) {
-        return res.status(400).json({ error: "Certificado A1 e senha são obrigatórios" });
-      }
 
       if (justificativa.trim().length < 15) {
         return res.status(400).json({ error: "Justificativa deve ter no mínimo 15 caracteres" });
@@ -2838,6 +2835,30 @@ ${company.razaoSocial}
         return res.status(400).json({ error: "UF da empresa não cadastrada" });
       }
 
+      if (certFile && !certPassword) {
+        return res.status(400).json({ error: "Senha do certificado não informada" });
+      }
+
+      const certPasswordToUse = certPassword || company.certificadoSenha;
+      if (!certPasswordToUse) {
+        return res.status(400).json({ error: "Senha do certificado não cadastrada" });
+      }
+
+      let certBuffer: Buffer | null = null;
+      if (certFile) {
+        certBuffer = await fs.readFile(certFile.path);
+      } else if (company.certificadoPath) {
+        const certKey = contaboStorage.getKeyFromPublicUrl(company.certificadoPath);
+        if (!certKey) {
+          return res.status(400).json({ error: "Certificado cadastrado com URL inválido" });
+        }
+        certBuffer = await contaboStorage.getFile(certKey);
+      }
+
+      if (!certBuffer) {
+        return res.status(400).json({ error: "Certificado A1 não encontrado" });
+      }
+
       const payload = {
         uf: company.uf,
         cnpj: company.cnpj,
@@ -2848,8 +2869,8 @@ ${company.razaoSocial}
         justificativa: String(justificativa),
         ano: String(ano || new Date().getFullYear()),
         tpAmb: (tpAmb === "2" ? "2" : "1") as "1" | "2",
-        certBuffer: await fs.readFile(certFile.path),
-        certPassword: String(certPassword),
+        certBuffer,
+        certPassword: String(certPasswordToUse),
       };
 
       const sefazResult = await solicitarInutilizacao(payload);

@@ -79,6 +79,7 @@ interface XmlEvent {
   numeroFinal: string | null;
   cnpj: string | null;
   modelo: string | null;
+  filepath?: string | null;
 }
 
 export default function Xmls() {
@@ -1283,6 +1284,17 @@ export default function Xmls() {
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex justify-end">
+                                {event.filepath && (
+                                  <a
+                                    href={event.filepath}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                    title="Abrir XML do evento"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </a>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="sm"

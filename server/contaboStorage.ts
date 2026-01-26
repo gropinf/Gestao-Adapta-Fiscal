@@ -351,6 +351,32 @@ export async function getXmlUrl(cnpj: string, chaveAcesso: string): Promise<stri
   return `${endpoint}/${bucket}/${key}`;
 }
 
+export function getKeyFromPublicUrl(url: string): string | null {
+  try {
+    const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+    const bucket = getBucket();
+
+    if (!endpoint) {
+      return null;
+    }
+
+    let normalized = url;
+    if (normalized.startsWith(endpoint)) {
+      normalized = normalized.slice(endpoint.length);
+    }
+
+    normalized = normalized.replace(/^\/+/, "");
+    if (normalized.startsWith(`${bucket}/`)) {
+      return normalized.slice(bucket.length + 1);
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Erro ao extrair key do URL:", error);
+    return null;
+  }
+}
+
 export async function testStorageConnection(): Promise<{ success: boolean; error?: string; details?: any }> {
   try {
     const client = getStorageClient();
@@ -516,6 +542,7 @@ export default {
   getXml,
   getSignedDownloadUrl,
   getXmlUrl,
+  getKeyFromPublicUrl,
   testStorageConnection,
   listFiles,
   listXmlsByCompany,

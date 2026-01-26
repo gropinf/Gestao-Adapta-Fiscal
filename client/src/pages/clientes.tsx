@@ -47,6 +47,7 @@ interface CompanyForm {
   nomeFantasia?: string;
   inscricaoEstadual?: string;
   crt?: string;
+  serie?: string;
   telefone?: string;
   email?: string;
   rua?: string;
@@ -200,6 +201,7 @@ export default function Clientes() {
       const error = await res.json().catch(() => ({}));
       throw new Error(error.error || "Erro ao enviar certificado");
     }
+    return res.json();
   };
 
   const onSubmit = async (data: CompanyForm) => {
@@ -214,10 +216,38 @@ export default function Clientes() {
       }
       if (editingCompany) {
         const company = await updateMutation.mutateAsync({ id: editingCompany.id, data });
-        await uploadCertificate(company.id);
+        const uploadResult = await uploadCertificate(company.id);
+        if (uploadResult?.certificadoPath) {
+          queryClient.setQueryData<Company[]>(["/api/companies"], (prev) => {
+            if (!prev) return prev;
+            return prev.map((item) =>
+              item.id === company.id
+                ? {
+                    ...item,
+                    certificadoPath: uploadResult.certificadoPath,
+                    certificadoSenha: certificatePassword,
+                  }
+                : item
+            );
+          });
+        }
       } else {
         const company = await createMutation.mutateAsync(data);
-        await uploadCertificate(company.id);
+        const uploadResult = await uploadCertificate(company.id);
+        if (uploadResult?.certificadoPath) {
+          queryClient.setQueryData<Company[]>(["/api/companies"], (prev) => {
+            if (!prev) return prev;
+            return prev.map((item) =>
+              item.id === company.id
+                ? {
+                    ...item,
+                    certificadoPath: uploadResult.certificadoPath,
+                    certificadoSenha: certificatePassword,
+                  }
+                : item
+            );
+          });
+        }
       }
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
       setIsDialogOpen(false);
@@ -253,6 +283,7 @@ export default function Clientes() {
       nomeFantasia: company.nomeFantasia || "",
       inscricaoEstadual: company.inscricaoEstadual || "",
       crt: company.crt || "",
+      serie: company.serie || "",
       telefone: company.telefone || "",
       email: company.email || "",
       rua: company.rua || "",
@@ -287,6 +318,7 @@ export default function Clientes() {
       razaoSocial: "",
       nomeFantasia: "",
       inscricaoEstadual: "",
+      serie: "",
       ativo: true,
       status: 2,
     });
@@ -755,7 +787,18 @@ export default function Clientes() {
                     </Select>
                   </div>
                 </div>
-                
+
+                <div className="space-y-2">
+                  <Label htmlFor="serie">Série NFe/NFCe</Label>
+                  <Input
+                    id="serie"
+                    {...register("serie")}
+                    placeholder="1"
+                    className="h-11"
+                    maxLength={3}
+                  />
+                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="razaoSocial">Razão Social *</Label>
                   <Input
@@ -815,9 +858,17 @@ export default function Clientes() {
                     className="h-11"
                   />
                   {editingCompany?.certificadoPath && (
-                    <p className="text-xs text-muted-foreground">
-                      Certificado atual cadastrado.
-                    </p>
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <p>Certificado atual cadastrado.</p>
+                      <a
+                        href={editingCompany.certificadoPath}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline"
+                      >
+                        Abrir certificado
+                      </a>
+                    </div>
                   )}
                 </div>
                 <div className="space-y-2">
@@ -828,6 +879,11 @@ export default function Clientes() {
                     onChange={(e) => setCertificatePassword(e.target.value)}
                     className="h-11"
                   />
+                  {editingCompany?.certificadoSenha && !certificatePassword && (
+                    <p className="text-xs text-muted-foreground">
+                      Senha já cadastrada. Preencha apenas se quiser alterar.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -910,24 +966,12 @@ export default function Clientes() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Certificado A1 (opcional)</Label>
-                  <Input
-                    type="file"
-                    accept=".pfx,.p12"
-                    onChange={(e) => setCertificateFile(e.target.files?.[0] || null)}
-                    className="h-11"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Senha do certificado</Label>
-                  <Input
-                    type="password"
-                    value={certificatePassword}
-                    onChange={(e) => setCertificatePassword(e.target.value)}
-                    className="h-11"
-                  />
-                </div>
+                <Alert className="bg-blue-50 dark:bg-blue-950 border-blue-200">
+                  <AlertCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-sm text-blue-900 dark:text-blue-100">
+                    Após salvar a empresa, você poderá cadastrar o certificado A1 na edição.
+                  </AlertDescription>
+                </Alert>
               </div>
 
               {/* Status */}
@@ -1108,6 +1152,17 @@ export default function Clientes() {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="serie">Série NFe/NFCe</Label>
+                  <Input
+                    id="serie"
+                    {...register("serie")}
+                    placeholder="1"
+                    className="h-11"
+                    maxLength={3}
+                  />
                 </div>
                 
                 <div className="space-y-2">

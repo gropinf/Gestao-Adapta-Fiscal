@@ -26,6 +26,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
+import { useQuery } from "@tanstack/react-query";
+import type { Company } from "@shared/schema";
 import {
   Dialog,
   DialogContent,
@@ -64,6 +66,31 @@ export default function AnaliseSequenciaPage() {
   const { toast } = useToast();
   const [location, navigate] = useLocation();
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
+  const userId = useAuthStore((state) => state.user?.id);
+
+  const { data: companies = [] } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+    enabled: !!userId,
+    queryFn: async () => {
+      const res = await fetch("/api/companies", {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Erro ao carregar empresas");
+      }
+
+      return res.json();
+    },
+  });
+
+  const currentCompany = companies.find((company) => company.id === currentCompanyId) || null;
+  const canInutilizar = !!(
+    currentCompany?.serie &&
+    currentCompany?.certificadoPath &&
+    currentCompany?.certificadoSenha
+  );
   
   // Set default dates (first day of previous month to last day of previous month)
   const hoje = new Date();
@@ -90,6 +117,12 @@ export default function AnaliseSequenciaPage() {
       setFilters(prev => ({ ...prev, companyId: currentCompanyId }));
     }
   }, [currentCompanyId]);
+
+  useEffect(() => {
+    if (currentCompany?.serie) {
+      setInutSerie(currentCompany.serie);
+    }
+  }, [currentCompany?.serie]);
   
   const [sequence, setSequence] = useState<SequenceItem[]>([]);
   const [summary, setSummary] = useState<SequenceSummary | null>(null);
@@ -110,10 +143,8 @@ export default function AnaliseSequenciaPage() {
   >([]);
   const [isInutilizarOpen, setIsInutilizarOpen] = useState(false);
   const [inutTarget, setInutTarget] = useState<{ inicio: number; fim: number } | null>(null);
-  const [inutSerie, setInutSerie] = useState("1");
+  const [inutSerie, setInutSerie] = useState("");
   const [inutJustificativa, setInutJustificativa] = useState("");
-  const [inutCertFile, setInutCertFile] = useState<File | null>(null);
-  const [inutCertPassword, setInutCertPassword] = useState("");
   const [inutLoading, setInutLoading] = useState(false);
 
   // Removido carregamento automático - usuário deve clicar no botão "Analisar"
@@ -247,10 +278,41 @@ export default function AnaliseSequenciaPage() {
   };
 
   const handleOpenInutilizar = (inicio: number, fim: number) => {
+    if (!currentCompanyId) {
+      toast({
+        title: "Empresa não selecionada",
+        description: "Selecione uma empresa antes de inutilizar.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!currentCompany) {
+      toast({
+        title: "Empresa não encontrada",
+        description: "Não foi possível carregar os dados da empresa selecionada.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const missing: string[] = [];
+    if (!currentCompany.serie) missing.push("série");
+    if (!currentCompany.certificadoPath) missing.push("certificado A1");
+    if (!currentCompany.certificadoSenha) missing.push("senha do certificado");
+
+    if (missing.length > 0) {
+      toast({
+        title: "Dados incompletos",
+        description: `Preencha ${missing.join(", ")} no cadastro do cliente antes de inutilizar.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setInutSerie(currentCompany.serie);
     setInutTarget({ inicio, fim });
     setInutJustificativa("");
-    setInutCertFile(null);
-    setInutCertPassword("");
     setIsInutilizarOpen(true);
   };
 
@@ -263,6 +325,14 @@ export default function AnaliseSequenciaPage() {
       });
       return;
     }
+    if (!currentCompany) {
+      toast({
+        title: "Empresa não encontrada",
+        description: "Não foi possível carregar os dados da empresa selecionada.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!inutTarget) {
       toast({
         title: "Faixa inválida",
@@ -271,10 +341,10 @@ export default function AnaliseSequenciaPage() {
       });
       return;
     }
-    if (!inutCertFile || !inutCertPassword) {
+    if (!currentCompany.serie || !currentCompany.certificadoPath || !currentCompany.certificadoSenha) {
       toast({
-        title: "Certificado obrigatório",
-        description: "Anexe o certificado A1 e informe a senha.",
+        title: "Dados obrigatórios",
+        description: "Preencha série, certificado A1 e senha no cadastro do cliente.",
         variant: "destructive",
       });
       return;
@@ -294,13 +364,11 @@ export default function AnaliseSequenciaPage() {
       const formData = new FormData();
       formData.append("companyId", filters.companyId);
       formData.append("modelo", filters.modelo);
-      formData.append("serie", inutSerie);
+      formData.append("serie", inutSerie || currentCompany.serie);
       formData.append("numeroInicial", String(inutTarget.inicio));
       formData.append("numeroFinal", String(inutTarget.fim));
       formData.append("justificativa", inutJustificativa);
       formData.append("ano", ano);
-      formData.append("certificate", inutCertFile);
-      formData.append("certPassword", inutCertPassword);
 
       const res = await fetch("/api/xml-events/inutilizar", {
         method: "POST",
@@ -659,6 +727,12 @@ export default function AnaliseSequenciaPage() {
                           onClick={() =>
                             handleOpenInutilizar(item.numeroInicio!, item.numeroFim!)
                           }
+                          disabled={!canInutilizar}
+                          title={
+                            canInutilizar
+                              ? "Inutilizar numeração"
+                              : "Preencha série, certificado e senha no cadastro do cliente"
+                          }
                         >
                           <Ban className="h-4 w-4 mr-2" />
                           Inutilizar
@@ -714,7 +788,7 @@ export default function AnaliseSequenciaPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>Série</Label>
-                  <Input value={inutSerie} onChange={(e) => setInutSerie(e.target.value)} />
+                  <Input value={inutSerie} disabled />
                 </div>
               </div>
               <div className="space-y-2">
@@ -725,19 +799,25 @@ export default function AnaliseSequenciaPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Certificado A1 (.pfx/.p12)</Label>
-                <Input
-                  type="file"
-                  accept=".pfx,.p12"
-                  onChange={(e) => setInutCertFile(e.target.files?.[0] || null)}
-                />
+                <Label>Certificado A1</Label>
+                <Input value={currentCompany?.certificadoPath || ""} disabled />
+                {currentCompany?.certificadoPath && (
+                  <a
+                    href={currentCompany.certificadoPath}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    Abrir certificado
+                  </a>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Senha do certificado</Label>
                 <Input
                   type="password"
-                  value={inutCertPassword}
-                  onChange={(e) => setInutCertPassword(e.target.value)}
+                  value={currentCompany?.certificadoSenha || ""}
+                  disabled
                 />
               </div>
             </div>
