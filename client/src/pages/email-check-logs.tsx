@@ -43,9 +43,16 @@ interface EmailCheckLog {
   finishedAt: string | null;
   durationMs: number | null;
   emailsChecked: number;
+  emailsSkippedSeen: number;
+  emailsDeleted: number;
+  emailsErrored: number;
   xmlsFound: number;
   xmlsProcessed: number;
   xmlsDuplicated: number;
+  lastEmailUid: string | null;
+  lastEmailDate: string | null;
+  lastEmailSubject: string | null;
+  lastEmailFrom: string | null;
   errorMessage: string | null;
   errorDetails: string | null;
   triggeredBy: string;
@@ -443,7 +450,24 @@ ${log.errorDetails ? `Detalhes: ${log.errorDetails}` : ""}
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          <div className="font-medium">{log.emailsChecked}</div>
+                          <div className="space-y-0.5">
+                            <div className="font-medium">{log.emailsChecked}</div>
+                            {log.emailsSkippedSeen > 0 && (
+                              <div className="text-xs text-muted-foreground">
+                                {log.emailsSkippedSeen} ignorado(s)
+                              </div>
+                            )}
+                            {log.emailsDeleted > 0 && (
+                              <div className="text-xs text-blue-600">
+                                {log.emailsDeleted} deletado(s)
+                              </div>
+                            )}
+                            {log.emailsErrored > 0 && (
+                              <div className="text-xs text-destructive">
+                                {log.emailsErrored} erro(s)
+                              </div>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-center">
                           <div className="space-y-0.5">

@@ -14,6 +14,9 @@ interface CheckResult {
   monitorId?: string;
   monitorEmail?: string;
   emailsChecked: number;
+  emailsSkippedSeen: number;
+  emailsDeleted: number;
+  emailsErrored: number;
   xmlsFound: number;
   xmlsProcessed: number;
   xmlsDuplicated: number;
@@ -37,6 +40,9 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     monitorId: monitor.id,
     monitorEmail: monitor.email,
     emailsChecked: 0,
+    emailsSkippedSeen: 0,
+    emailsDeleted: 0,
+    emailsErrored: 0,
     xmlsFound: 0,
     xmlsProcessed: 0,
     xmlsDuplicated: 0,
@@ -52,6 +58,29 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
   };
 
   let logUpdated = false;
+  const lastEmailMeta: {
+    uid?: number;
+    date?: Date | null;
+    subject?: string | null;
+    from?: string | null;
+  } = {};
+
+  const updateLastEmailMeta = (uid?: number, parsed?: any) => {
+    if (uid) {
+      lastEmailMeta.uid = uid;
+    }
+    if (parsed) {
+      if (parsed.date instanceof Date) {
+        lastEmailMeta.date = parsed.date;
+      }
+      if (typeof parsed.subject === "string") {
+        lastEmailMeta.subject = parsed.subject;
+      }
+      if (parsed.from?.text) {
+        lastEmailMeta.from = parsed.from.text;
+      }
+    }
+  };
   const updateCheckLogSafe = async (data: Partial<Omit<EmailCheckLog, "id" | "createdAt">>) => {
     try {
       await storage.updateEmailCheckLog(checkLog.id, data);
@@ -276,9 +305,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     finishedAt: null,
     durationMs: null,
     emailsChecked: 0,
+    emailsSkippedSeen: 0,
+    emailsDeleted: 0,
+    emailsErrored: 0,
     xmlsFound: 0,
     xmlsProcessed: 0,
     xmlsDuplicated: 0,
+    lastEmailUid: null,
+    lastEmailDate: null,
+    lastEmailSubject: null,
+    lastEmailFrom: null,
     errorMessage: null,
     errorDetails: null,
     triggeredBy,
@@ -413,9 +449,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         finishedAt: new Date(),
         durationMs: duration,
         emailsChecked: result.emailsChecked,
+        emailsSkippedSeen: result.emailsSkippedSeen,
+        emailsDeleted: result.emailsDeleted,
+        emailsErrored: result.emailsErrored,
         xmlsFound: result.xmlsFound,
         xmlsProcessed: result.xmlsProcessed,
         xmlsDuplicated: result.xmlsDuplicated,
+        lastEmailUid: lastEmailMeta.uid ? String(lastEmailMeta.uid) : null,
+        lastEmailDate: lastEmailMeta.date || null,
+        lastEmailSubject: lastEmailMeta.subject || null,
+        lastEmailFrom: lastEmailMeta.from || null,
         errorMessage: null,
         errorDetails: null,
       });
@@ -435,6 +478,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         
         if (emailUid && seenUidSet.has(emailUid.toString())) {
           console.log(`[IMAP Monitor] ⏭️ Email UID ${emailUid} já registrado, pulando...`);
+          result.emailsSkippedSeen++;
+          updateLastEmailMeta(emailUid);
           continue;
         }
 
@@ -445,6 +490,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         }
 
         const parsed = await simpleParser(all.body);
+        updateLastEmailMeta(emailUid, parsed);
         
         // Verificar se tem anexos
         if (!parsed.attachments || parsed.attachments.length === 0) {
@@ -600,6 +646,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
                 });
               }
               console.log(`[IMAP Monitor] 🗑️ Email UID ${emailUid} deletado após processamento`);
+              result.emailsDeleted++;
             } catch (deleteError) {
               const errorMsg = deleteError instanceof Error ? deleteError.message : "Erro ao deletar email";
               console.warn(`[IMAP Monitor] ⚠️ Falha ao deletar email UID ${emailUid}:`, deleteError);
@@ -617,17 +664,27 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             await markSeenUid(emailUid, reason);
           }
         }
-
-    } catch (emailError) {
+      } catch (emailError) {
         const errorMsg = emailError instanceof Error ? emailError.message : 'Erro desconhecido';
         console.error(`[IMAP Monitor] ⚠️ Erro ao processar email:`, errorMsg);
         emailHadErrors = true;
-      addError("email", errorMsg, { emailUid });
+        addError("email", errorMsg, { emailUid });
+        updateLastEmailMeta(emailUid);
+      } finally {
+        if (emailHadErrors) {
+          result.emailsErrored++;
+        }
       }
     }
 
-    // 8. Atualizar last_checked_at
-    await storage.updateEmailMonitorLastCheck(monitor.id);
+    // 8. Atualizar último check e último email processado
+    await storage.updateEmailMonitor(monitor.id, {
+      lastCheckedAt: new Date(),
+      lastEmailUid: lastEmailMeta.uid ? String(lastEmailMeta.uid) : null,
+      lastEmailDate: lastEmailMeta.date || null,
+      lastEmailSubject: lastEmailMeta.subject || null,
+      lastEmailFrom: lastEmailMeta.from || null,
+    });
 
     // 9. Resultado final
     result.success = true;
@@ -651,9 +708,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       finishedAt: new Date(),
       durationMs: duration,
       emailsChecked: result.emailsChecked,
+      emailsSkippedSeen: result.emailsSkippedSeen,
+      emailsDeleted: result.emailsDeleted,
+      emailsErrored: result.emailsErrored,
       xmlsFound: result.xmlsFound,
       xmlsProcessed: result.xmlsProcessed,
       xmlsDuplicated: result.xmlsDuplicated,
+      lastEmailUid: lastEmailMeta.uid ? String(lastEmailMeta.uid) : null,
+      lastEmailDate: lastEmailMeta.date || null,
+      lastEmailSubject: lastEmailMeta.subject || null,
+      lastEmailFrom: lastEmailMeta.from || null,
       errorMessage: result.errors.length > 0 ? getFirstErrorSummary() : null,
       errorDetails: result.errors.length > 0 ? JSON.stringify(result.errors) : null,
     });
@@ -681,9 +745,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       finishedAt: new Date(),
       durationMs: duration,
       emailsChecked: result.emailsChecked,
+      emailsSkippedSeen: result.emailsSkippedSeen,
+      emailsDeleted: result.emailsDeleted,
+      emailsErrored: result.emailsErrored,
       xmlsFound: result.xmlsFound,
       xmlsProcessed: result.xmlsProcessed,
       xmlsDuplicated: result.xmlsDuplicated,
+      lastEmailUid: lastEmailMeta.uid ? String(lastEmailMeta.uid) : null,
+      lastEmailDate: lastEmailMeta.date || null,
+      lastEmailSubject: lastEmailMeta.subject || null,
+      lastEmailFrom: lastEmailMeta.from || null,
       errorMessage: errorMsg,
       errorDetails,
     });
@@ -703,9 +774,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         finishedAt: new Date(),
         durationMs: duration,
         emailsChecked: result.emailsChecked,
+        emailsSkippedSeen: result.emailsSkippedSeen,
+        emailsDeleted: result.emailsDeleted,
+        emailsErrored: result.emailsErrored,
         xmlsFound: result.xmlsFound,
         xmlsProcessed: result.xmlsProcessed,
         xmlsDuplicated: result.xmlsDuplicated,
+        lastEmailUid: lastEmailMeta.uid ? String(lastEmailMeta.uid) : null,
+        lastEmailDate: lastEmailMeta.date || null,
+        lastEmailSubject: lastEmailMeta.subject || null,
+        lastEmailFrom: lastEmailMeta.from || null,
         errorMessage: result.success ? null : fallbackMessage,
         errorDetails: result.success ? null : fallbackDetails,
       });

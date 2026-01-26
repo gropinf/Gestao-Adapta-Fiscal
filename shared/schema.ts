@@ -177,6 +177,10 @@ export const emailMonitors = pgTable("email_monitors", {
   monitorSince: timestamp("monitor_since"), // Data inicial para monitoramento (ignora emails anteriores)
   lastCheckedAt: timestamp("last_checked_at"),
   lastEmailId: text("last_email_id"), // ID do último email processado (para evitar duplicatas)
+  lastEmailUid: text("last_email_uid"),
+  lastEmailDate: timestamp("last_email_date"),
+  lastEmailSubject: text("last_email_subject"),
+  lastEmailFrom: text("last_email_from"),
   checkIntervalMinutes: integer("check_interval_minutes").default(15), // Intervalo de verificação em minutos
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -267,9 +271,16 @@ export const emailCheckLogs = pgTable("email_check_logs", {
   finishedAt: timestamp("finished_at"), // Data/hora de término
   durationMs: integer("duration_ms"), // Duração em milissegundos
   emailsChecked: integer("emails_checked").default(0).notNull(), // Quantidade de emails verificados
+  emailsSkippedSeen: integer("emails_skipped_seen").default(0).notNull(),
+  emailsDeleted: integer("emails_deleted").default(0).notNull(),
+  emailsErrored: integer("emails_errored").default(0).notNull(),
   xmlsFound: integer("xmls_found").default(0).notNull(), // Quantidade de XMLs encontrados
   xmlsProcessed: integer("xmls_processed").default(0).notNull(), // Quantidade de XMLs processados com sucesso
   xmlsDuplicated: integer("xmls_duplicated").default(0).notNull(), // Quantidade de XMLs duplicados
+  lastEmailUid: text("last_email_uid"),
+  lastEmailDate: timestamp("last_email_date"),
+  lastEmailSubject: text("last_email_subject"),
+  lastEmailFrom: text("last_email_from"),
   errorMessage: text("error_message"), // Mensagem de erro (se houver)
   errorDetails: text("error_details"), // Detalhes dos erros (JSON array)
   triggeredBy: text("triggered_by").default("manual").notNull(), // manual, cron, api

@@ -50,6 +50,10 @@ interface EmailMonitor {
   monitorSince: string | null;
   lastCheckedAt: string | null;
   lastEmailId: string | null;
+  lastEmailUid: string | null;
+  lastEmailDate: string | null;
+  lastEmailSubject: string | null;
+  lastEmailFrom: string | null;
   checkIntervalMinutes: number;
   createdAt: string;
 }
@@ -544,6 +548,7 @@ export function EmailMonitorList() {
                 <TableHead>Monitorar Desde</TableHead>
                 <TableHead>Intervalo</TableHead>
                 <TableHead>Última Verificação</TableHead>
+                <TableHead>Último Email</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
@@ -584,6 +589,23 @@ export function EmailMonitorList() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {formatDate(monitor.lastCheckedAt)}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {monitor.lastEmailDate ? (
+                      <div className="space-y-0.5">
+                        <div className="font-medium">{formatDate(monitor.lastEmailDate)}</div>
+                        {monitor.lastEmailUid && (
+                          <div className="text-xs">UID {monitor.lastEmailUid}</div>
+                        )}
+                        {monitor.lastEmailSubject && (
+                          <div className="text-xs truncate max-w-[200px]" title={monitor.lastEmailSubject}>
+                            {monitor.lastEmailSubject}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      "N/A"
+                    )}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
