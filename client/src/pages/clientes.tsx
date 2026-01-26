@@ -73,6 +73,8 @@ export default function Clientes() {
   const [filterAtivo, setFilterAtivo] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [certificateFile, setCertificateFile] = useState<File | null>(null);
+  const [certificatePassword, setCertificatePassword] = useState("");
 
   const { register, handleSubmit, reset, setValue, watch, formState: { errors, isSubmitting } } = useForm<CompanyForm>();
 
@@ -121,22 +123,6 @@ export default function Clientes() {
 
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-      setIsDialogOpen(false);
-      reset();
-      toast({
-        title: "Cliente cadastrado!",
-        description: "O cliente foi adicionado com sucesso",
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Erro ao cadastrar",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
   });
 
   // Update company mutation
@@ -164,23 +150,6 @@ export default function Clientes() {
       }
 
       return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-      setIsDialogOpen(false);
-      setEditingCompany(null);
-      reset();
-      toast({
-        title: "Cliente atualizado!",
-        description: "As informações foram atualizadas com sucesso",
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Erro ao atualizar",
-        description: error.message,
-        variant: "destructive",
-      });
     },
   });
 
@@ -216,11 +185,56 @@ export default function Clientes() {
     },
   });
 
-  const onSubmit = (data: CompanyForm) => {
-    if (editingCompany) {
-      updateMutation.mutate({ id: editingCompany.id, data });
-    } else {
-      createMutation.mutate(data);
+  const uploadCertificate = async (companyId: string) => {
+    if (!certificateFile || !certificatePassword) return;
+    const formData = new FormData();
+    formData.append("certificate", certificateFile);
+    formData.append("certPassword", certificatePassword);
+    const res = await fetch(`/api/companies/${companyId}/certificate`, {
+      method: "POST",
+      headers: getAuthHeader(),
+      credentials: "include",
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || "Erro ao enviar certificado");
+    }
+  };
+
+  const onSubmit = async (data: CompanyForm) => {
+    try {
+      if ((certificateFile && !certificatePassword) || (!certificateFile && certificatePassword)) {
+        toast({
+          title: "Certificado incompleto",
+          description: "Informe certificado A1 e senha.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (editingCompany) {
+        const company = await updateMutation.mutateAsync({ id: editingCompany.id, data });
+        await uploadCertificate(company.id);
+      } else {
+        const company = await createMutation.mutateAsync(data);
+        await uploadCertificate(company.id);
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      setIsDialogOpen(false);
+      setEditingCompany(null);
+      reset();
+      setCertificateFile(null);
+      setCertificatePassword("");
+      toast({
+        title: editingCompany ? "Cliente atualizado!" : "Cliente cadastrado!",
+        description: "As informações foram salvas com sucesso",
+      });
+    } catch (error) {
+      toast({
+        title: "Erro ao salvar",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
     }
   };
 
@@ -250,6 +264,8 @@ export default function Clientes() {
       ativo: company.ativo ?? true,
       status: company.status ?? 2,
     });
+    setCertificateFile(null);
+    setCertificatePassword("");
     setIsDialogOpen(true);
   };
 
@@ -274,6 +290,8 @@ export default function Clientes() {
       ativo: true,
       status: 2,
     });
+    setCertificateFile(null);
+    setCertificatePassword("");
     setIsDialogOpen(true);
   };
 
@@ -641,6 +659,8 @@ export default function Clientes() {
               setIsDialogOpen(false);
               setEditingCompany(null);
               reset();
+              setCertificateFile(null);
+              setCertificatePassword("");
             }}
             editForm={
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 py-4">
@@ -785,6 +805,30 @@ export default function Clientes() {
                     />
                   </div>
                 </div>
+
+                <div className="space-y-2">
+                  <Label>Certificado A1 (opcional)</Label>
+                  <Input
+                    type="file"
+                    accept=".pfx,.p12"
+                    onChange={(e) => setCertificateFile(e.target.files?.[0] || null)}
+                    className="h-11"
+                  />
+                  {editingCompany?.certificadoPath && (
+                    <p className="text-xs text-muted-foreground">
+                      Certificado atual cadastrado.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>Senha do certificado</Label>
+                  <Input
+                    type="password"
+                    value={certificatePassword}
+                    onChange={(e) => setCertificatePassword(e.target.value)}
+                    className="h-11"
+                  />
+                </div>
               </div>
 
               {/* Endereço */}
@@ -865,6 +909,25 @@ export default function Clientes() {
                     />
                   </div>
                 </div>
+
+                <div className="space-y-2">
+                  <Label>Certificado A1 (opcional)</Label>
+                  <Input
+                    type="file"
+                    accept=".pfx,.p12"
+                    onChange={(e) => setCertificateFile(e.target.files?.[0] || null)}
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Senha do certificado</Label>
+                  <Input
+                    type="password"
+                    value={certificatePassword}
+                    onChange={(e) => setCertificatePassword(e.target.value)}
+                    className="h-11"
+                  />
+                </div>
               </div>
 
               {/* Status */}
@@ -914,6 +977,8 @@ export default function Clientes() {
                     setIsDialogOpen(false);
                     setEditingCompany(null);
                     reset();
+                    setCertificateFile(null);
+                    setCertificatePassword("");
                   }}
                   data-testid="button-cancel"
                   disabled={isSubmitting}
@@ -1222,6 +1287,8 @@ export default function Clientes() {
                   onClick={() => {
                     setIsDialogOpen(false);
                     reset();
+                    setCertificateFile(null);
+                    setCertificatePassword("");
                   }}
                   data-testid="button-cancel"
                   disabled={isSubmitting}

@@ -2,11 +2,11 @@ import imapSimple from 'imap-simple';
 import unzipper from "unzipper";
 import { simpleParser } from 'mailparser';
 import { storage } from './storage';
-import { parseXmlContent, isValidNFeXml } from './xmlParser';
+import { parseXmlContent, isValidNFeXml, getNfeAuthorizationStatus } from './xmlParser';
 import { isValidEventXml, parseEventOrInutilizacao, type ParsedEventoData, type ParsedInutilizacaoData } from './xmlEventParser';
 import { saveXmlToContabo, saveEventXmlToContabo } from './xmlStorageService';
 import { getOrCreateCompanyByCnpj } from './utils/companyAutoCreate';
-import type { EmailMonitor } from '@shared/schema';
+import type { EmailMonitor, EmailCheckLog } from '@shared/schema';
 
 interface CheckResult {
   success: boolean;
@@ -186,6 +186,14 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       });
 
       return { hadError, processed: true, duplicated };
+    }
+
+    const authorization = await getNfeAuthorizationStatus(xmlContent);
+    if (!authorization.authorized) {
+      const motivo = authorization.motivo || "XML não autorizado";
+      const statusLabel = authorization.cStat ? `cStat ${authorization.cStat}` : "sem cStat";
+      addError("sefaz", `${motivo} (${statusLabel})`, { filename, emailUid });
+      return { hadError: true, processed, duplicated };
     }
 
     // Parsear XML de NFe/NFCe

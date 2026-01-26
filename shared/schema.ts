@@ -46,6 +46,8 @@ export const companies = pgTable("companies", {
   emailSsl: boolean("email_ssl").default(true),
   emailUser: text("email_user"),
   emailPassword: text("email_password"),
+  certificadoPath: text("certificado_path"),
+  certificadoSenha: text("certificado_senha"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

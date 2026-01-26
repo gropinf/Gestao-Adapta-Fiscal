@@ -26,6 +26,14 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface SequenceItem {
   tipo: "emitida" | "inutilizada" | "faltante";
@@ -100,6 +108,13 @@ export default function AnaliseSequenciaPage() {
       inutProtocolo: string | null;
     }>
   >([]);
+  const [isInutilizarOpen, setIsInutilizarOpen] = useState(false);
+  const [inutTarget, setInutTarget] = useState<{ inicio: number; fim: number } | null>(null);
+  const [inutSerie, setInutSerie] = useState("1");
+  const [inutJustificativa, setInutJustificativa] = useState("");
+  const [inutCertFile, setInutCertFile] = useState<File | null>(null);
+  const [inutCertPassword, setInutCertPassword] = useState("");
+  const [inutLoading, setInutLoading] = useState(false);
 
   // Removido carregamento automático - usuário deve clicar no botão "Analisar"
   // Isso evita erros ao acessar a página antes da empresa estar carregada
@@ -229,6 +244,91 @@ export default function AnaliseSequenciaPage() {
       title: "Exportado",
       description: "Análise exportada com sucesso",
     });
+  };
+
+  const handleOpenInutilizar = (inicio: number, fim: number) => {
+    setInutTarget({ inicio, fim });
+    setInutJustificativa("");
+    setInutCertFile(null);
+    setInutCertPassword("");
+    setIsInutilizarOpen(true);
+  };
+
+  const handleSubmitInutilizar = async () => {
+    if (!filters.companyId) {
+      toast({
+        title: "Empresa não selecionada",
+        description: "Selecione uma empresa antes de inutilizar.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!inutTarget) {
+      toast({
+        title: "Faixa inválida",
+        description: "Selecione um número faltante.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!inutCertFile || !inutCertPassword) {
+      toast({
+        title: "Certificado obrigatório",
+        description: "Anexe o certificado A1 e informe a senha.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (inutJustificativa.trim().length < 15) {
+      toast({
+        title: "Justificativa inválida",
+        description: "A justificativa deve ter ao menos 15 caracteres.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setInutLoading(true);
+    try {
+      const ano = filters.periodStart.slice(0, 4);
+      const formData = new FormData();
+      formData.append("companyId", filters.companyId);
+      formData.append("modelo", filters.modelo);
+      formData.append("serie", inutSerie);
+      formData.append("numeroInicial", String(inutTarget.inicio));
+      formData.append("numeroFinal", String(inutTarget.fim));
+      formData.append("justificativa", inutJustificativa);
+      formData.append("ano", ano);
+      formData.append("certificate", inutCertFile);
+      formData.append("certPassword", inutCertPassword);
+
+      const res = await fetch("/api/xml-events/inutilizar", {
+        method: "POST",
+        headers: getAuthHeader(),
+        body: formData,
+        credentials: "include",
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Erro ao inutilizar número");
+      }
+
+      toast({
+        title: "Inutilização autorizada",
+        description: data.xMotivo || "Número inutilizado com sucesso.",
+      });
+      setIsInutilizarOpen(false);
+      await loadSequence();
+    } catch (error) {
+      toast({
+        title: "Erro na inutilização",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setInutLoading(false);
+    }
   };
 
   const filteredSequence = showOnlyMissing
@@ -542,7 +642,7 @@ export default function AnaliseSequenciaPage() {
                     {item.tipo === "faltante" && (
                       <div className="flex items-start gap-2 w-full">
                         <AlertCircle className="h-4 w-4 text-red-600 mt-1 shrink-0" />
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-1">
                           <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
                             {item.numeroInicio === item.numeroFim 
                               ? formatNumero(item.numeroInicio!)
@@ -553,6 +653,16 @@ export default function AnaliseSequenciaPage() {
                             FALTANTES / NÃO LOCALIZADAS
                           </span>
                         </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            handleOpenInutilizar(item.numeroInicio!, item.numeroFim!)
+                          }
+                        >
+                          <Ban className="h-4 w-4 mr-2" />
+                          Inutilizar
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -578,6 +688,79 @@ export default function AnaliseSequenciaPage() {
             </CardContent>
           </Card>
         )}
+        <Dialog open={isInutilizarOpen} onOpenChange={setIsInutilizarOpen}>
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Inutilizar numeração</DialogTitle>
+              <DialogDescription>
+                Enviar inutilização à SEFAZ usando certificado A1.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Número inicial</Label>
+                  <Input value={inutTarget?.inicio ?? ""} disabled />
+                </div>
+                <div className="space-y-2">
+                  <Label>Número final</Label>
+                  <Input value={inutTarget?.fim ?? ""} disabled />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Modelo</Label>
+                  <Input value={filters.modelo} disabled />
+                </div>
+                <div className="space-y-2">
+                  <Label>Série</Label>
+                  <Input value={inutSerie} onChange={(e) => setInutSerie(e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Justificativa (mín. 15 caracteres)</Label>
+                <Input
+                  value={inutJustificativa}
+                  onChange={(e) => setInutJustificativa(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Certificado A1 (.pfx/.p12)</Label>
+                <Input
+                  type="file"
+                  accept=".pfx,.p12"
+                  onChange={(e) => setInutCertFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Senha do certificado</Label>
+                <Input
+                  type="password"
+                  value={inutCertPassword}
+                  onChange={(e) => setInutCertPassword(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsInutilizarOpen(false)} disabled={inutLoading}>
+                Cancelar
+              </Button>
+              <Button onClick={handleSubmitInutilizar} disabled={inutLoading}>
+                {inutLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Enviando...
+                  </>
+                ) : (
+                  <>
+                    <Ban className="h-4 w-4 mr-2" />
+                    Inutilizar
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

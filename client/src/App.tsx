@@ -17,6 +17,7 @@ import Relatorios from "@/pages/relatorios";
 import EmailMonitorPage from "@/pages/email-monitor";
 import EmailCheckLogs from "@/pages/email-check-logs";
 import EmailMonitorRuns from "@/pages/email-monitor-runs";
+import PurgeUnapprovedXmls from "@/pages/purge-unapproved-xmls";
 import EnvioXmlEmail from "@/pages/envio-xml-email";
 import EmailGlobalPage from "@/pages/email-global";
 import ActivatePage from "@/pages/activate";
@@ -55,6 +56,7 @@ function Router() {
       <Route path="/configuracoes/email-global" component={EmailGlobalPage} />
       <Route path="/configuracoes/email-logs" component={EmailCheckLogs} />
       <Route path="/configuracoes/email-monitor-runs" component={EmailMonitorRuns} />
+      <Route path="/configuracoes/purge-unapproved-xmls" component={PurgeUnapprovedXmls} />
       <Route path="/envio-xml-email" component={EnvioXmlEmail} />
       <Route path="/auditoria/acessos" component={AuditoriaAcessos} />
       <Route path="/perfil" component={Perfil} />

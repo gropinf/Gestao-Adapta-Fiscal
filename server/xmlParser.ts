@@ -347,3 +347,42 @@ export function isValidNFeXml(xmlContent: string): boolean {
     return false;
   }
 }
+
+/**
+ * Verifica se o XML contém protocolo autorizado pela SEFAZ (cStat=100)
+ */
+export async function getNfeAuthorizationStatus(xmlContent: string): Promise<{
+  authorized: boolean;
+  cStat?: string | null;
+  motivo?: string | null;
+}> {
+  try {
+    const result = await parseXml(xmlContent, {
+      explicitArray: true,
+      mergeAttrs: true,
+      explicitRoot: true,
+    });
+
+    const cStat = extractValue(result, 'nfeProc.protNFe.infProt.cStat');
+    const motivo = extractValue(result, 'nfeProc.protNFe.infProt.xMotivo');
+
+    if (!cStat) {
+      return {
+        authorized: false,
+        cStat: null,
+        motivo: "Sem protocolo de autorização",
+      };
+    }
+
+    return {
+      authorized: cStat === "100",
+      cStat,
+      motivo,
+    };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Erro ao validar autorização SEFAZ: ${error.message}`);
+    }
+    throw new Error("Erro desconhecido ao validar autorização SEFAZ");
+  }
+}

@@ -34,6 +34,7 @@ import {
   LogOut,
   ChevronDown,
   HardDrive,
+  Trash2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
@@ -103,6 +104,12 @@ const menuItems = [
     title: "Histórico Agendamentos",
     url: "/configuracoes/email-monitor-runs",
     icon: Mail,
+    adminOnly: true,
+  },
+  {
+    title: "Limpeza XMLs",
+    url: "/configuracoes/purge-unapproved-xmls",
+    icon: Trash2,
     adminOnly: true,
   },
   {

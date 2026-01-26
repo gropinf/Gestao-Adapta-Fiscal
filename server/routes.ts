@@ -4,8 +4,9 @@ import { storage } from "./storage";
 import { authMiddleware, hashPassword, comparePassword, generateToken, type AuthRequest } from "./auth";
 import { logger } from "./logger";
 import { isAdmin, canAccessCompany, isActiveUser } from "./middleware/authorization";
-import { parseXmlContent, validateChave, isValidNFeXml } from "./xmlParser";
+import { parseXmlContent, validateChave, isValidNFeXml, getNfeAuthorizationStatus } from "./xmlParser";
 import { parseEventOrInutilizacao, isValidEventXml, detectEventType, type ParsedEventoData, type ParsedInutilizacaoData } from "./xmlEventParser";
+import { solicitarInutilizacao } from "./sefazInutilizacaoService";
 import { saveToValidated, fileExists as storageFileExists } from "./fileStorage";
 import { saveXmlToContabo, saveEventXmlToContabo } from "./xmlStorageService";
 import { readXmlContent, readXmlBuffer } from "./xmlReaderService";
@@ -112,6 +113,20 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error("Only XML, ZIP or RAR files are allowed"));
+    }
+  },
+});
+
+const certUpload = multer({
+  dest: "/tmp/uploads",
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = file.originalname.toLowerCase();
+    const isPfx = name.endsWith(".pfx") || name.endsWith(".p12");
+    if (isPfx) {
+      cb(null, true);
+    } else {
+      cb(new Error("Somente certificados .pfx ou .p12 são permitidos"));
     }
   },
 });
@@ -1535,6 +1550,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Upload certificado A1 da empresa (admin only)
+  app.post("/api/companies/:id/certificate", authMiddleware, isAdmin, certUpload.single("certificate"), async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { certPassword } = req.body;
+      const certFile = req.file as Express.Multer.File | undefined;
+
+      if (!certFile || !certPassword) {
+        return res.status(400).json({ error: "Certificado e senha são obrigatórios" });
+      }
+
+      const company = await storage.getCompany(id);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      const buffer = await fs.readFile(certFile.path);
+      const uploadResult = await contaboStorage.uploadCompanyCertificate(
+        buffer,
+        company.cnpj,
+        certFile.originalname
+      );
+
+      if (!uploadResult.success || !uploadResult.url) {
+        return res.status(500).json({ error: uploadResult.error || "Erro ao salvar certificado" });
+      }
+
+      const updated = await storage.updateCompany(id, {
+        certificadoPath: uploadResult.url,
+        certificadoSenha: certPassword,
+      });
+
+      if (!updated) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "company_certificate_upload",
+        details: JSON.stringify({ companyId: id, cnpj: company.cnpj }),
+      });
+
+      res.json({
+        success: true,
+        certificadoPath: uploadResult.url,
+      });
+    } catch (error) {
+      console.error("Upload company certificate error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    } finally {
+      const certFile = req.file as Express.Multer.File | undefined;
+      if (certFile) {
+        await fs.unlink(certFile.path).catch(() => {});
+      }
+    }
+  });
+
   app.delete("/api/companies/:id", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
@@ -2731,6 +2803,129 @@ ${company.razaoSocial}
     }
   });
 
+  // Inutilizar número via SEFAZ (admin only)
+  app.post("/api/xml-events/inutilizar", authMiddleware, isAdmin, certUpload.single("certificate"), async (req: AuthRequest, res) => {
+    try {
+      const {
+        companyId,
+        modelo,
+        serie,
+        numeroInicial,
+        numeroFinal,
+        justificativa,
+        ano,
+        tpAmb,
+        certPassword,
+      } = req.body;
+
+      const certFile = req.file as Express.Multer.File | undefined;
+      if (!companyId || !modelo || !serie || !numeroInicial || !numeroFinal || !justificativa) {
+        return res.status(400).json({ error: "Campos obrigatórios não informados" });
+      }
+      if (!certFile || !certPassword) {
+        return res.status(400).json({ error: "Certificado A1 e senha são obrigatórios" });
+      }
+
+      if (justificativa.trim().length < 15) {
+        return res.status(400).json({ error: "Justificativa deve ter no mínimo 15 caracteres" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+      if (!company.uf) {
+        return res.status(400).json({ error: "UF da empresa não cadastrada" });
+      }
+
+      const payload = {
+        uf: company.uf,
+        cnpj: company.cnpj,
+        modelo: String(modelo),
+        serie: String(serie),
+        numeroInicial: Number(numeroInicial),
+        numeroFinal: Number(numeroFinal),
+        justificativa: String(justificativa),
+        ano: String(ano || new Date().getFullYear()),
+        tpAmb: (tpAmb === "2" ? "2" : "1") as "1" | "2",
+        certBuffer: await fs.readFile(certFile.path),
+        certPassword: String(certPassword),
+      };
+
+      const sefazResult = await solicitarInutilizacao(payload);
+      const { cStat, xMotivo } = sefazResult.status;
+
+      if (cStat !== "102") {
+        return res.status(400).json({
+          error: "Inutilização não autorizada",
+          cStat,
+          xMotivo,
+        });
+      }
+
+      const parsedEvent = await parseEventOrInutilizacao(sefazResult.procInutXml);
+      const inutData = parsedEvent as ParsedInutilizacaoData;
+
+      const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
+        companyId,
+        modelo: inutData.modelo,
+        serie: inutData.serie,
+        numeroInicial: inutData.numeroInicial,
+        numeroFinal: inutData.numeroFinal,
+        protocolo: inutData.protocolo ?? null,
+        dataEvento: inutData.dataEvento ?? null,
+        horaEvento: inutData.horaEvento ?? null,
+      });
+      if (duplicate) {
+        return res.status(409).json({ error: "Inutilização já registrada" });
+      }
+
+      const saveResult = await saveEventXmlToContabo(sefazResult.procInutXml, parsedEvent);
+      if (!saveResult.success) {
+        return res.status(500).json({ error: saveResult.error || "Erro ao salvar inutilização" });
+      }
+
+      await storage.createXmlEvent({
+        companyId,
+        chaveNFe: null,
+        xmlId: null,
+        tipoEvento: "inutilizacao",
+        codigoEvento: null,
+        dataEvento: inutData.dataEvento,
+        horaEvento: inutData.horaEvento,
+        numeroSequencia: null,
+        protocolo: inutData.protocolo,
+        justificativa: inutData.justificativa,
+        correcao: null,
+        ano: inutData.ano,
+        serie: inutData.serie,
+        numeroInicial: inutData.numeroInicial,
+        numeroFinal: inutData.numeroFinal,
+        cnpj: inutData.cnpj,
+        modelo: inutData.modelo,
+        filepath: saveResult.filepath || "",
+      });
+
+      res.json({
+        success: true,
+        cStat,
+        xMotivo,
+        protocolo: inutData.protocolo,
+        dataEvento: inutData.dataEvento,
+        horaEvento: inutData.horaEvento,
+      });
+    } catch (error) {
+      console.error("Inutilizar numero error:", error);
+      const message = error instanceof Error ? error.message : "Erro interno";
+      res.status(500).json({ error: message });
+    } finally {
+      const certFile = req.file as Express.Multer.File | undefined;
+      if (certFile) {
+        await fs.unlink(certFile.path).catch(() => {});
+      }
+    }
+  });
+
   // Alerts Routes
   
   // Get alerts for company
@@ -3833,6 +4028,183 @@ ${company.razaoSocial}
     }
   });
 
+  // Hard delete XMLs by emission date (admin only)
+  app.delete("/api/xmls/purge-by-emission", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { dateFrom, dateTo } = req.query;
+      if (!dateFrom || typeof dateFrom !== "string") {
+        return res.status(400).json({ error: "dateFrom é obrigatório (YYYY-MM-DD)" });
+      }
+
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(dateFrom)) {
+        return res.status(400).json({ error: "Formato de dateFrom inválido. Use YYYY-MM-DD" });
+      }
+      if (dateTo && (typeof dateTo !== "string" || !dateRegex.test(dateTo))) {
+        return res.status(400).json({ error: "Formato de dateTo inválido. Use YYYY-MM-DD" });
+      }
+
+      const xmls = await storage.getXmlsByEmissionDateRange(dateFrom, dateTo);
+      const results = {
+        total: xmls.length,
+        deleted: 0,
+        filesDeleted: 0,
+        danfesDeleted: 0,
+        errors: [] as Array<{ id: string; chave: string; error: string }>,
+      };
+
+      for (const xml of xmls) {
+        try {
+          if (xml.filepath) {
+            try {
+              await fs.unlink(xml.filepath);
+              results.filesDeleted += 1;
+            } catch (error) {
+              console.warn(`[PURGE] ⚠️ Falha ao remover XML ${xml.filepath}:`, error);
+            }
+          }
+
+          const danfePath = getDanfePath(xml.chave);
+          if (danfePath) {
+            try {
+              await fs.unlink(danfePath);
+              results.danfesDeleted += 1;
+            } catch (error) {
+              console.warn(`[PURGE] ⚠️ Falha ao remover DANFE ${danfePath}:`, error);
+            }
+          }
+
+          await storage.deleteXml(xml.id);
+          results.deleted += 1;
+        } catch (error) {
+          results.errors.push({
+            id: xml.id,
+            chave: xml.chave,
+            error: error instanceof Error ? error.message : "Erro desconhecido",
+          });
+        }
+      }
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "xml_hard_delete_by_emission",
+        details: JSON.stringify({
+          dateFrom,
+          dateTo: dateTo || null,
+          total: results.total,
+          deleted: results.deleted,
+          filesDeleted: results.filesDeleted,
+          danfesDeleted: results.danfesDeleted,
+          errors: results.errors.length,
+        }),
+      });
+
+      res.json(results);
+    } catch (error) {
+      console.error("Purge XMLs by emission error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Hard delete unapproved XMLs by emission date (admin only)
+  app.delete("/api/xmls/purge-unapproved", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { dateFrom, dateTo } = req.query;
+      if (!dateFrom || typeof dateFrom !== "string") {
+        return res.status(400).json({ error: "dateFrom é obrigatório (YYYY-MM-DD)" });
+      }
+
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(dateFrom)) {
+        return res.status(400).json({ error: "Formato de dateFrom inválido. Use YYYY-MM-DD" });
+      }
+      if (dateTo && (typeof dateTo !== "string" || !dateRegex.test(dateTo))) {
+        return res.status(400).json({ error: "Formato de dateTo inválido. Use YYYY-MM-DD" });
+      }
+
+      const xmls = await storage.getXmlsByEmissionDateRange(dateFrom, dateTo);
+      const results = {
+        total: xmls.length,
+        checked: 0,
+        deleted: 0,
+        skippedAuthorized: 0,
+        filesDeleted: 0,
+        danfesDeleted: 0,
+        errors: [] as Array<{ id: string; chave: string; error: string }>,
+      };
+
+      for (const xml of xmls) {
+        results.checked += 1;
+        try {
+          const xmlContent = await readXmlContent(xml.filepath);
+          if (!xmlContent) {
+            results.errors.push({
+              id: xml.id,
+              chave: xml.chave,
+              error: "Arquivo XML não encontrado",
+            });
+            continue;
+          }
+
+          const authorization = await getNfeAuthorizationStatus(xmlContent);
+          if (authorization.authorized) {
+            results.skippedAuthorized += 1;
+            continue;
+          }
+
+          if (xml.filepath) {
+            try {
+              await fs.unlink(xml.filepath);
+              results.filesDeleted += 1;
+            } catch (error) {
+              console.warn(`[PURGE] ⚠️ Falha ao remover XML ${xml.filepath}:`, error);
+            }
+          }
+
+          const danfePath = getDanfePath(xml.chave);
+          if (danfePath) {
+            try {
+              await fs.unlink(danfePath);
+              results.danfesDeleted += 1;
+            } catch (error) {
+              console.warn(`[PURGE] ⚠️ Falha ao remover DANFE ${danfePath}:`, error);
+            }
+          }
+
+          await storage.deleteXml(xml.id);
+          results.deleted += 1;
+        } catch (error) {
+          results.errors.push({
+            id: xml.id,
+            chave: xml.chave,
+            error: error instanceof Error ? error.message : "Erro desconhecido",
+          });
+        }
+      }
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "xml_hard_delete_unapproved",
+        details: JSON.stringify({
+          dateFrom,
+          dateTo: dateTo || null,
+          total: results.total,
+          checked: results.checked,
+          deleted: results.deleted,
+          skippedAuthorized: results.skippedAuthorized,
+          filesDeleted: results.filesDeleted,
+          danfesDeleted: results.danfesDeleted,
+          errors: results.errors.length,
+        }),
+      });
+
+      res.json(results);
+    } catch (error) {
+      console.error("Purge unapproved XMLs error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Soft delete XML
   app.delete("/api/xmls/:id", authMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -3888,6 +4260,7 @@ ${company.razaoSocial}
       res.status(500).json({ error: "Internal server error" });
     }
   });
+
 
   // POST /api/xmls/send-selected - Envia múltiplos XMLs selecionados por email
   app.post("/api/xmls/send-selected", authMiddleware, async (req: AuthRequest, res) => {
@@ -4327,8 +4700,8 @@ ${company.razaoSocial}
           // 2. Leitura do conteúdo
           const xmlContent = await fs.readFile(file.path, "utf-8");
 
-          // 3. Validação básica de estrutura XML NFe
-          if (!isValidNFeXml(xmlContent)) {
+        // 3. Validação básica de estrutura XML NFe
+        if (!isValidNFeXml(xmlContent)) {
             hadError = true;
             results.errors.push({
               filename: file.originalname,
@@ -4339,7 +4712,22 @@ ${company.razaoSocial}
             continue;
           }
 
-          // 4. Parse do XML
+        // 3.1 Validação de autorização SEFAZ (cStat=100)
+        const authorization = await getNfeAuthorizationStatus(xmlContent);
+        if (!authorization.authorized) {
+          hadError = true;
+          const motivo = authorization.motivo || "XML não autorizado";
+          const statusLabel = authorization.cStat ? `cStat ${authorization.cStat}` : "sem cStat";
+          results.errors.push({
+            filename: file.originalname,
+            error: `${motivo} (${statusLabel})`,
+            step: "sefaz",
+          });
+          await fs.unlink(file.path).catch(() => {});
+          continue;
+        }
+
+        // 4. Parse do XML
           let parsedXml;
           try {
             parsedXml = await parseXmlContent(xmlContent);

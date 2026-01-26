@@ -94,6 +94,7 @@ export interface IStorage {
   getXmlByChave(chave: string): Promise<Xml | undefined>;
   getXmlsByCompany(companyId: string, filters?: XmlFilters): Promise<Xml[]>;
   getXmlsByCnpj(cnpj: string, filters?: XmlFilters): Promise<Xml[]>;
+  getXmlsByEmissionDateRange(dateFrom: string, dateTo?: string): Promise<Xml[]>;
   createXml(xml: InsertXml): Promise<Xml>;
   updateXml(id: string, xml: Partial<InsertXml>): Promise<Xml | undefined>;
   softDeleteXml(id: string, deletedAt?: Date): Promise<Xml | undefined>;
@@ -626,6 +627,18 @@ export class DatabaseStorage implements IStorage {
       );
     }
     return query.orderBy(desc(xmls.dataEmissao), desc(xmls.hora));
+  }
+
+  async getXmlsByEmissionDateRange(dateFrom: string, dateTo?: string): Promise<Xml[]> {
+    const conditions = [isNull(xmls.deletedAt), gte(xmls.dataEmissao, dateFrom)];
+    if (dateTo) {
+      conditions.push(lte(xmls.dataEmissao, dateTo));
+    }
+    return await db
+      .select()
+      .from(xmls)
+      .where(and(...conditions))
+      .orderBy(desc(xmls.dataEmissao));
   }
 
   async createXml(insertXml: InsertXml): Promise<Xml> {

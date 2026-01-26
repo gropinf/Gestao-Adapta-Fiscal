@@ -198,6 +198,18 @@ export async function uploadXmlFromFile(
   return uploadXml(file, cnpj, chaveAcesso);
 }
 
+export async function uploadCompanyCertificate(
+  file: Buffer,
+  cnpj: string,
+  originalFilename: string
+): Promise<UploadResult> {
+  const cleanCnpj = sanitizeCnpj(cnpj);
+  const extension = originalFilename.toLowerCase().endsWith(".p12") ? "p12" : "pfx";
+  const key = `${cleanCnpj}/certificado/certificado_${cleanCnpj}.${extension}`;
+
+  return uploadFile(file, key, "application/x-pkcs12");
+}
+
 export async function deleteFile(key: string): Promise<boolean> {
   try {
     const client = getStorageClient();
