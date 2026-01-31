@@ -94,6 +94,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     let hadError = false;
     let processed = false;
     let duplicated = false;
+    let unauthorized = false;
 
     const isNfeXml = isValidNFeXml(xmlContent);
     const isEventXml = !isNfeXml && isValidEventXml(xmlContent);
@@ -101,7 +102,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     if (!isNfeXml && !isEventXml) {
       console.log(`[IMAP Monitor] ⚠️ Arquivo ${filename} não é um XML válido de NFe/NFCe ou Evento`);
       addError("xml-validate", "Não é XML de NFe/NFCe ou Evento", { filename, emailUid });
-      return { hadError: true, processed, duplicated };
+      return { hadError: false, processed, duplicated, unauthorized };
     }
 
     if (isEventXml) {
@@ -125,7 +126,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           horaEvento: eventoData.horaEvento ?? null,
         });
         if (duplicate) {
-          return { hadError, processed, duplicated: true };
+          return { hadError, processed, duplicated: true, unauthorized };
         }
 
         const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
@@ -135,7 +136,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
             `Erro ao salvar evento no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
             { filename, emailUid }
           );
-          return { hadError: true, processed, duplicated };
+          return { hadError: true, processed, duplicated, unauthorized };
         }
 
         const xml = await storage.getXmlByChave(eventoData.chaveNFe);
@@ -165,7 +166,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           await storage.updateXml(xml.id, { dataCancelamento: eventoData.dataEvento });
         }
 
-        return { hadError, processed: true, duplicated };
+        return { hadError, processed: true, duplicated, unauthorized };
       }
 
       const inutData = parsedEvent as ParsedInutilizacaoData;
@@ -180,7 +181,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         horaEvento: inutData.horaEvento ?? null,
       });
       if (duplicate) {
-        return { hadError, processed, duplicated: true };
+        return { hadError, processed, duplicated: true, unauthorized };
       }
 
       const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
@@ -190,7 +191,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
           `Erro ao salvar inutilização no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
           { filename, emailUid }
         );
-        return { hadError: true, processed, duplicated };
+        return { hadError: true, processed, duplicated, unauthorized };
       }
 
       await storage.createXmlEvent({
@@ -214,7 +215,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         filepath: saveResult.filepath || "",
       });
 
-      return { hadError, processed: true, duplicated };
+      return { hadError, processed: true, duplicated, unauthorized };
     }
 
     const authorization = await getNfeAuthorizationStatus(xmlContent);
@@ -222,7 +223,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
       const motivo = authorization.motivo || "XML não autorizado";
       const statusLabel = authorization.cStat ? `cStat ${authorization.cStat}` : "sem cStat";
       addError("sefaz", `${motivo} (${statusLabel})`, { filename, emailUid });
-      return { hadError: true, processed, duplicated };
+      unauthorized = true;
+      return { hadError: false, processed, duplicated, unauthorized };
     }
 
     // Parsear XML de NFe/NFCe
@@ -232,7 +234,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     const existingXml = await storage.getXmlByChave(parsedXml.chave);
     if (existingXml) {
       console.log(`[IMAP Monitor] 📋 XML já existe: ${parsedXml.chave.substring(0, 15)}...`);
-      return { hadError, processed, duplicated: true };
+      return { hadError, processed, duplicated: true, unauthorized };
     }
 
     // Buscar ou criar empresa pelo CNPJ do emitente
@@ -263,7 +265,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         `Erro ao salvar no Contabo Storage - ${saveResult.error || 'Erro desconhecido'}`,
         { filename, emailUid }
       );
-      return { hadError: true, processed, duplicated };
+      return { hadError: true, processed, duplicated, unauthorized };
     }
 
     // Salvar no banco de dados
@@ -285,7 +287,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     });
 
     console.log(`[IMAP Monitor] ✅ XML processado: ${parsedXml.chave.substring(0, 15)}... (${parsedXml.numeroNota || 'S/N'})`);
-    return { hadError, processed: true, duplicated };
+    return { hadError, processed: true, duplicated, unauthorized };
   };
 
   const getFirstErrorSummary = () => {
@@ -470,6 +472,8 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
     for (const message of messages) {
       let emailUid: number | undefined;
       let emailHadErrors = false;
+      let emailDeletable = false;
+      let emailHadUnauthorized = false;
       let emailXmlsFound = 0;
       let emailXmlsProcessed = 0;
       let emailXmlsDuplicated = 0;
@@ -561,7 +565,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
 
             try {
               const xmlContent = attachment.content.toString('utf-8');
-              const { hadError, processed, duplicated } = await processXmlContent(xmlContent, filename, emailUid);
+              const { hadError, processed, duplicated, unauthorized } = await processXmlContent(xmlContent, filename, emailUid);
               if (hadError) emailHadErrors = true;
               if (processed) {
                 result.xmlsProcessed++;
@@ -570,6 +574,12 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
               if (duplicated) {
                 result.xmlsDuplicated++;
                 emailXmlsDuplicated++;
+              }
+              if (unauthorized) {
+                emailHadUnauthorized = true;
+              }
+              if (processed || duplicated || unauthorized) {
+                emailDeletable = true;
               }
             } catch (xmlError) {
               const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
@@ -597,7 +607,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
               try {
                 const entryBuffer = await entry.buffer();
                 const xmlContent = entryBuffer.toString("utf-8");
-                const { hadError, processed, duplicated } = await processXmlContent(xmlContent, entry.path, emailUid);
+                const { hadError, processed, duplicated, unauthorized } = await processXmlContent(xmlContent, entry.path, emailUid);
                 if (hadError) emailHadErrors = true;
                 if (processed) {
                   result.xmlsProcessed++;
@@ -606,6 +616,12 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
                 if (duplicated) {
                   result.xmlsDuplicated++;
                   emailXmlsDuplicated++;
+                }
+                if (unauthorized) {
+                  emailHadUnauthorized = true;
+                }
+                if (processed || duplicated || unauthorized) {
+                  emailDeletable = true;
                 }
               } catch (xmlError) {
                 const errorMsg = xmlError instanceof Error ? xmlError.message : 'Erro desconhecido';
@@ -627,8 +643,7 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         }
 
         if (monitor.deleteAfterProcess && emailUid) {
-          const shouldDeleteEmail =
-            !emailHadErrors && emailXmlsFound > 0 && (emailXmlsProcessed > 0 || emailXmlsDuplicated > 0);
+          const shouldDeleteEmail = !emailHadErrors && emailDeletable;
 
           if (shouldDeleteEmail) {
             try {
@@ -656,11 +671,16 @@ export async function checkEmailMonitor(monitor: EmailMonitor, userId: string, t
         }
 
         if (!monitor.deleteAfterProcess && emailUid) {
-          const shouldMarkSeen =
-            !emailHadErrors && emailXmlsFound > 0 && (emailXmlsProcessed > 0 || emailXmlsDuplicated > 0);
+          const shouldMarkSeen = !emailHadErrors && emailDeletable;
 
           if (shouldMarkSeen) {
-            const reason = emailXmlsProcessed > 0 ? "processed_no_delete" : "duplicate_xml";
+            const reason = emailXmlsProcessed > 0
+              ? "processed_no_delete"
+              : emailXmlsDuplicated > 0
+                ? "duplicate_xml"
+                : emailHadUnauthorized
+                  ? "unauthorized_xml"
+                  : "processed_no_delete";
             await markSeenUid(emailUid, reason);
           }
         }
