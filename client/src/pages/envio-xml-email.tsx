@@ -47,6 +47,12 @@ interface FormData {
   destinationEmail: string;
 }
 
+interface GlobalEmailInfo {
+  configured: boolean;
+  fromEmail: string | null;
+  fromName: string | null;
+}
+
 export default function EnvioXmlEmail() {
   const { toast } = useToast();
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
@@ -82,6 +88,23 @@ export default function EnvioXmlEmail() {
       selectedCompany?.emailPort &&
       selectedCompany?.emailPassword
   );
+
+  const { data: globalEmailInfo } = useQuery<GlobalEmailInfo>({
+    queryKey: ["/api/email/global/public"],
+    queryFn: async () => {
+      const response = await fetch("/api/email/global/public", {
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error("Erro ao buscar email global");
+      }
+      return response.json();
+    },
+  });
+
+  const canSendEmail = isEmailConfigured || !!globalEmailInfo?.configured;
+  const remetenteEmail = selectedCompany?.emailUser || globalEmailInfo?.fromEmail || "Não configurado";
 
   // Carrega histórico ao montar o componente ou trocar de empresa
   useEffect(() => {
@@ -130,10 +153,10 @@ export default function EnvioXmlEmail() {
       });
       return;
     }
-    if (!isEmailConfigured) {
+    if (!canSendEmail) {
       toast({
         title: "Email não configurado",
-        description: "Configure o email SMTP da empresa antes de enviar.",
+        description: "Configure o email SMTP da empresa ou o email global antes de enviar.",
         variant: "destructive",
       });
       return;
@@ -297,15 +320,26 @@ export default function EnvioXmlEmail() {
                 <div className="md:col-span-2">
                   <span className="font-medium text-blue-700">Email Remetente:</span>{" "}
                   <span className="text-blue-900">
-                    {selectedCompany.emailUser || "Não configurado"}
+                    {remetenteEmail}
                   </span>
+                  {!isEmailConfigured && globalEmailInfo?.configured && (
+                    <Badge className="ml-2 bg-emerald-100 text-emerald-700 border-emerald-200">
+                      Global
+                    </Badge>
+                  )}
                 </div>
               </div>
             </div>
-            {!isEmailConfigured && (
+            {!isEmailConfigured && globalEmailInfo?.configured && (
+              <div className="border border-emerald-200 bg-emerald-50 text-emerald-800 rounded-lg p-3 text-sm">
+                Email SMTP não configurado para esta empresa. O envio será feito usando o email global{" "}
+                <span className="font-semibold">{globalEmailInfo.fromEmail}</span>.
+              </div>
+            )}
+            {!isEmailConfigured && !globalEmailInfo?.configured && (
               <div className="border border-red-200 bg-red-50 text-red-700 rounded-lg p-3 text-sm">
-                Email SMTP não configurado para esta empresa. Informe host, porta, usuário e senha
-                em Configurações da Empresa para habilitar o envio.
+                Email SMTP não configurado para esta empresa e não há email global ativo.
+                Informe host, porta, usuário e senha em Configurações da Empresa ou configure o email global.
               </div>
             )}
 
@@ -376,7 +410,7 @@ export default function EnvioXmlEmail() {
             </div>
 
             {/* Botão Enviar */}
-            <Button type="submit" className="w-full" disabled={loading || !isEmailConfigured}>
+            <Button type="submit" className="w-full" disabled={loading || !canSendEmail}>
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />

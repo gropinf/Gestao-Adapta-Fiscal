@@ -1892,6 +1892,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Email Routes
+  // Public global email info (authenticated)
+  app.get("/api/email/global/public", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const settings = await storage.getEmailGlobalSettings();
+      const configured = hasGlobalEmailConfig(settings);
+      res.json({
+        configured,
+        fromEmail: settings?.fromEmail || null,
+        fromName: settings?.fromName || null,
+      });
+    } catch (error) {
+      console.error("Get public global email settings error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Global email settings (admin only)
   app.get("/api/email/global", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
