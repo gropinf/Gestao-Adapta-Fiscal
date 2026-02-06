@@ -105,6 +105,7 @@ export default function EnvioXmlEmail() {
 
   const canSendEmail = isEmailConfigured || !!globalEmailInfo?.configured;
   const remetenteEmail = selectedCompany?.emailUser || globalEmailInfo?.fromEmail || "Não configurado";
+  const lastHistory = history[0];
 
   // Carrega histórico ao montar o componente ou trocar de empresa
   useEffect(() => {
@@ -177,7 +178,11 @@ export default function EnvioXmlEmail() {
         }),
       });
 
-      const result = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      const rawBody = await response.text();
+      const result = contentType.includes("application/json")
+        ? JSON.parse(rawBody)
+        : { error: rawBody };
 
       if (!response.ok) {
         throw new Error(result.error || "Erro ao enviar XMLs");
@@ -285,7 +290,7 @@ export default function EnvioXmlEmail() {
       </div>
 
       {/* Card de Envio */}
-      <Card>
+        <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Send className="w-5 h-5" />
@@ -296,6 +301,24 @@ export default function EnvioXmlEmail() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+            {lastHistory?.status === "failed" && (
+              <div className="mb-4 border border-red-200 bg-red-50 text-red-700 rounded-lg p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>
+                      Último envio com erro:{" "}
+                      <span className="font-semibold">
+                        {lastHistory.errorMessage || "Erro não informado"}
+                      </span>
+                    </span>
+                  </div>
+                  <a href="#email-history" className="text-xs underline">
+                    Ver detalhes
+                  </a>
+                </div>
+              </div>
+            )}
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             {/* Informações da Empresa */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -428,7 +451,7 @@ export default function EnvioXmlEmail() {
       </Card>
 
       {/* Card de Histórico */}
-      <Card>
+      <Card id="email-history">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Package className="w-5 h-5" />
@@ -439,6 +462,19 @@ export default function EnvioXmlEmail() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {lastHistory?.status === "failed" && (
+            <div className="mb-4 border border-red-200 bg-red-50 text-red-700 rounded-lg p-3 text-sm">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                <span>
+                  O último envio falhou. Motivo:{" "}
+                  <span className="font-semibold">
+                    {lastHistory.errorMessage || "Erro não informado"}
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
           {loadingHistory ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -456,6 +492,7 @@ export default function EnvioXmlEmail() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Status</TableHead>
+                    <TableHead>Erro</TableHead>
                     <TableHead>Data/Hora</TableHead>
                     <TableHead>Período</TableHead>
                     <TableHead>Email Destino</TableHead>
@@ -468,6 +505,18 @@ export default function EnvioXmlEmail() {
                   {history.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>{getStatusBadge(item.status)}</TableCell>
+                      <TableCell>
+                        {item.status === "failed" ? (
+                          <span
+                            className="text-xs text-red-600 truncate max-w-[220px] block"
+                            title={item.errorMessage || "Erro não informado"}
+                          >
+                            {item.errorMessage || "Erro não informado"}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {formatDateTime(item.createdAt)}
                       </TableCell>
