@@ -112,6 +112,12 @@ export default function XmlDetail() {
     );
   };
 
+  const formatDateBR = (dateStr: string): string => {
+    if (!dateStr) return "";
+    const [year, month, day] = dateStr.split("-");
+    return `${day}/${month}/${year}`;
+  };
+
   const formatCEP = (cep: string) => {
     if (!cep || cep.length !== 8) return cep;
     return cep.replace(/^(\d{5})(\d{3})$/, "$1-$2");
@@ -386,6 +392,15 @@ export default function XmlDetail() {
                 >
                   {xml.statusValidacao === "valido" ? "VÁLIDO" : "INVÁLIDO"}
                 </Badge>
+                {xml.dataCancelamento && (
+                  <Badge
+                    variant="outline"
+                    className="bg-destructive/10 text-destructive border-destructive/20"
+                    title={`Cancelada em ${formatDateBR(xml.dataCancelamento)}`}
+                  >
+                    CANCELADA
+                  </Badge>
+                )}
               </div>
             </div>
           </CardHeader>

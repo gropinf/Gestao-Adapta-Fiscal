@@ -46,6 +46,7 @@ interface SequenceItem {
   chave?: string;
   id?: string;
   justificativa?: string;
+  dataCancelamento?: string | null;
 }
 
 interface SequenceSummary {
@@ -53,6 +54,7 @@ interface SequenceSummary {
   totalInutilizadas: number;
   totalFaltantes: number;
   totalInconsistencias?: number;
+  totalValorEmitidas?: number;
   primeiroNumero: number | null;
   ultimoNumero: number | null;
   modelo: string;
@@ -203,6 +205,13 @@ export default function AnaliseSequenciaPage() {
     return num.toString().padStart(5, "0");
   };
 
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format(value);
+  };
+
   const handleFilter = () => {
     loadSequence();
   };
@@ -221,6 +230,7 @@ export default function AnaliseSequenciaPage() {
     text += `Total Emitidas: ${summary.totalEmitidas}\n`;
     text += `Total Inutilizadas: ${summary.totalInutilizadas}\n`;
     text += `Total Faltantes: ${summary.totalFaltantes}\n`;
+    text += `Total Valor Emitidas (sem canceladas): ${formatCurrency(summary.totalValorEmitidas || 0)}\n`;
     text += `Faixa: ${summary.primeiroNumero} a ${summary.ultimoNumero}\n\n`;
     text += `SEQUÊNCIA:\n`;
     text += `${"=".repeat(60)}\n\n`;
@@ -570,7 +580,7 @@ export default function AnaliseSequenciaPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                 <div className="p-4 bg-blue-50 rounded-lg">
                   <div className="text-2xl font-bold text-blue-600">
                     {summary.totalEmitidas}
@@ -588,6 +598,14 @@ export default function AnaliseSequenciaPage() {
                     {summary.totalFaltantes}
                   </div>
                   <div className="text-sm text-muted-foreground">Faltantes</div>
+                </div>
+                <div className="p-4 bg-emerald-50 rounded-lg">
+                  <div className="text-sm font-bold text-emerald-700">
+                    {formatCurrency(summary.totalValorEmitidas || 0)}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Total emitidas (sem canceladas)
+                  </div>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-lg">
                   <div className="text-sm font-bold text-gray-600">
@@ -671,6 +689,11 @@ export default function AnaliseSequenciaPage() {
                           <span className="text-muted-foreground">
                             {formatDateBR(item.data!)}
                           </span>
+                          {item.dataCancelamento && (
+                            <Badge variant="destructive">
+                              Cancelada
+                            </Badge>
+                          )}
                         </div>
                         <Button
                           variant="ghost"

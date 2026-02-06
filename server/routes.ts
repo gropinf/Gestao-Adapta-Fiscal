@@ -2232,9 +2232,16 @@ ${company.razaoSocial}
           data: xml.dataEmissao,
           chave: xml.chave,
           id: xml.id,
+          dataCancelamento: xml.dataCancelamento || null,
         }))
         .filter(n => n.numero > 0)
         .sort((a, b) => a.numero - b.numero);
+
+      const totalValorEmitidas = xmls.reduce((sum, xml) => {
+        if (xml.dataCancelamento) return sum;
+        const valor = parseFloat(xml.totalNota || "0");
+        return sum + (Number.isNaN(valor) ? 0 : valor);
+      }, 0);
 
       if (notasEmitidas.length === 0) {
         return res.json({
@@ -2243,6 +2250,7 @@ ${company.razaoSocial}
             totalEmitidas: 0,
             totalInutilizadas: 0,
             totalFaltantes: 0,
+            totalValorEmitidas: 0,
             primeiroNumero: null,
             ultimoNumero: null,
           },
@@ -2267,6 +2275,7 @@ ${company.razaoSocial}
             data: nota.data,
             chave: nota.chave,
             id: nota.id,
+          dataCancelamento: nota.dataCancelamento,
           });
           i++;
         } else {
@@ -2353,6 +2362,7 @@ ${company.razaoSocial}
           totalInutilizadas,
           totalFaltantes,
           totalInconsistencias: inconsistencias.length,
+          totalValorEmitidas,
           primeiroNumero,
           ultimoNumero,
           modelo: modelo === "55" ? "NFe" : "NFCe",

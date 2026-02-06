@@ -61,6 +61,7 @@ interface Xml {
   tipo?: 'EMIT' | 'DEST';  // Emitida ou Recebida
   cnpjEmitente?: string;
   cnpjDestinatario?: string;
+  dataCancelamento?: string | null;
 }
 
 interface XmlEvent {
@@ -287,6 +288,13 @@ export default function Xmls() {
     const [year, month, day] = dateStr.split("-");
     return `${day}/${month}/${year}`;
   };
+
+  const totalEmitidasSemCanceladas = filteredXmls.reduce((sum, xml) => {
+    if (xml.tipo !== "EMIT") return sum;
+    if (xml.dataCancelamento) return sum;
+    const valor = parseFloat(xml.totalNota || "0");
+    return sum + (Number.isNaN(valor) ? 0 : valor);
+  }, 0);
 
   const handleFilter = () => {
     const nextFilters = {
@@ -960,6 +968,15 @@ export default function Xmls() {
           </CardContent>
         </Card>
 
+        {viewType === "xmls" && (
+          <div className="flex justify-end text-sm text-muted-foreground">
+            <span>Total emitidas (sem canceladas):</span>
+            <span className="ml-2 font-semibold text-foreground">
+              {formatCurrency(totalEmitidasSemCanceladas)}
+            </span>
+          </div>
+        )}
+
         {/* XMLs Table */}
         <Card>
           <CardContent className="p-0">
@@ -1088,7 +1105,15 @@ export default function Xmls() {
                             {xml.totalImpostos ? formatCurrency(xml.totalImpostos) : "—"}
                           </td>
                           <td className="px-6 py-4">
-                            {xml.statusValidacao === "valido" ? (
+                            {xml.dataCancelamento ? (
+                              <Badge
+                                variant="outline"
+                                className="bg-destructive/10 text-destructive border-destructive/20"
+                                title={`Cancelada em ${formatDateBR(xml.dataCancelamento)}`}
+                              >
+                                Cancelada
+                              </Badge>
+                            ) : xml.statusValidacao === "valido" ? (
                               <Badge
                                 variant="outline"
                                 className="bg-primary/10 text-primary border-primary/20"
