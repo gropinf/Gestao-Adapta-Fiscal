@@ -139,6 +139,20 @@ export const xmlEvents = pgTable("xml_events", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// API Keys table - Chaves de acesso para API
+export const apiKeys = pgTable("api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id")
+    .notNull()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  name: text("name"),
+  keyPrefix: varchar("key_prefix", { length: 12 }).notNull(),
+  keyHash: text("key_hash").notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Actions table - Audit trail
 export const actions = pgTable("actions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -440,6 +454,13 @@ export const insertXmlEventSchema = createInsertSchema(xmlEvents).omit({
   createdAt: true,
 });
 
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
+  id: true,
+  createdAt: true,
+  lastUsedAt: true,
+  revokedAt: true,
+});
+
 export const insertActionSchema = createInsertSchema(actions).omit({
   id: true,
   createdAt: true,
@@ -513,6 +534,9 @@ export type InsertXml = z.infer<typeof insertXmlSchema>;
 
 export type XmlEvent = typeof xmlEvents.$inferSelect;
 export type InsertXmlEvent = z.infer<typeof insertXmlEventSchema>;
+
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 
 export type Action = typeof actions.$inferSelect;
 export type InsertAction = z.infer<typeof insertActionSchema>;

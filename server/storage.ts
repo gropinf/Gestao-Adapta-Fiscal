@@ -16,6 +16,7 @@ import {
   xmlEmailHistory,
   emailCheckLogs,
   emailMonitorSeenUids,
+  apiKeys,
   type User,
   type InsertUser,
   type Company,
@@ -47,6 +48,8 @@ import {
   type InsertXmlEmailHistory,
   type EmailCheckLog,
   type InsertEmailCheckLog,
+  type ApiKey,
+  type InsertApiKey,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, like, or, gte, lte, sql, isNull, inArray } from "drizzle-orm";
@@ -151,6 +154,14 @@ export interface IStorage {
   getAlert(id: string): Promise<Alert | undefined>;
   resolveAlert(id: string, userId: string): Promise<Alert | undefined>;
   deleteAlert(id: string): Promise<void>;
+
+  // API Keys
+  createApiKey(apiKey: InsertApiKey): Promise<ApiKey>;
+  getApiKey(id: string): Promise<ApiKey | undefined>;
+  getApiKeyByHash(hash: string): Promise<ApiKey | undefined>;
+  getApiKeysByCompany(companyId: string): Promise<ApiKey[]>;
+  updateApiKeyLastUsed(id: string): Promise<void>;
+  revokeApiKey(id: string): Promise<ApiKey | undefined>;
   
   // Email Monitors
   getEmailMonitor(id: string): Promise<EmailMonitor | undefined>;
@@ -766,6 +777,46 @@ export class DatabaseStorage implements IStorage {
 
   async deleteAlert(id: string): Promise<void> {
     await db.delete(alerts).where(eq(alerts.id, id));
+  }
+
+  // API Keys
+  async createApiKey(apiKey: InsertApiKey): Promise<ApiKey> {
+    const [created] = await db.insert(apiKeys).values(apiKey).returning();
+    return created;
+  }
+
+  async getApiKey(id: string): Promise<ApiKey | undefined> {
+    const [key] = await db.select().from(apiKeys).where(eq(apiKeys.id, id));
+    return key || undefined;
+  }
+
+  async getApiKeyByHash(hash: string): Promise<ApiKey | undefined> {
+    const [key] = await db.select().from(apiKeys).where(eq(apiKeys.keyHash, hash));
+    return key || undefined;
+  }
+
+  async getApiKeysByCompany(companyId: string): Promise<ApiKey[]> {
+    return db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.companyId, companyId))
+      .orderBy(desc(apiKeys.createdAt));
+  }
+
+  async updateApiKeyLastUsed(id: string): Promise<void> {
+    await db
+      .update(apiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(apiKeys.id, id));
+  }
+
+  async revokeApiKey(id: string): Promise<ApiKey | undefined> {
+    const [key] = await db
+      .update(apiKeys)
+      .set({ revokedAt: new Date() })
+      .where(eq(apiKeys.id, id))
+      .returning();
+    return key || undefined;
   }
 
   // Email Monitors

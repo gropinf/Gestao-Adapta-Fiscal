@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { db } from "./db";
-import { users } from "@shared/schema";
+import { users, type Company } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -17,6 +17,12 @@ export interface AuthRequest extends Request {
   userId?: string;
   userRole?: string;
   userActive?: boolean;
+  apiKey?: {
+    id: string;
+    companyId: string;
+    name: string | null;
+  };
+  apiCompany?: Company;
 }
 
 export async function hashPassword(password: string): Promise<string> {

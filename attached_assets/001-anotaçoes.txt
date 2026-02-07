@@ -16,6 +16,11 @@ dados de enviar: smtp.mail.us-east-1.awsapps.com 465 SMTP_ENABLE_SSL=true
 organização = caixafacil.awsapps.com
 https://caixafacil.awsapps.com/mail 
 ===========
+no servidor
+API_KEY_BOOTSTRAP_SECRET=f32cf1b903cf6a6c340eb6e98c7d63dacbb248eb909be80852705b458fccfcf1
+no app monitor
+API_BOOTSTRAP_SECRET=f32cf1b903cf6a6c340eb6e98c7d63dacbb248eb909be80852705b458fccfcf1
+===========
 
 link enviar cliente e ou contabilidade
 https://SEU-DOMINIO.com/public/cadastro-empresa

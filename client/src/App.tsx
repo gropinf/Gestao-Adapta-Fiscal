@@ -20,6 +20,7 @@ import EmailMonitorRuns from "@/pages/email-monitor-runs";
 import PurgeUnapprovedXmls from "@/pages/purge-unapproved-xmls";
 import EnvioXmlEmail from "@/pages/envio-xml-email";
 import EmailGlobalPage from "@/pages/email-global";
+import ApiKeysPage from "@/pages/api-keys";
 import ActivatePage from "@/pages/activate";
 import ForgotPassword from "@/pages/forgot-password";
 import ResetPassword from "@/pages/reset-password";
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/relatorios" component={Relatorios} />
       <Route path="/configuracoes/email-monitor" component={EmailMonitorPage} />
       <Route path="/configuracoes/email-global" component={EmailGlobalPage} />
+      <Route path="/configuracoes/api-keys" component={ApiKeysPage} />
       <Route path="/configuracoes/email-logs" component={EmailCheckLogs} />
       <Route path="/configuracoes/email-monitor-runs" component={EmailMonitorRuns} />
       <Route path="/configuracoes/purge-unapproved-xmls" component={PurgeUnapprovedXmls} />

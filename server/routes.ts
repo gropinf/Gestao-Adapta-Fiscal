@@ -12,13 +12,14 @@ import { saveXmlToContabo, saveEventXmlToContabo } from "./xmlStorageService";
 import { readXmlContent, readXmlBuffer } from "./xmlReaderService";
 import { sendEmail, sendEmailWithFallback, sendGlobalEmail, sendPublicEmail, testEmailConnection, testGlobalEmailConnection, getTestEmailTemplate, hasEmailConfig, getXmlEmailTemplate, hasGlobalEmailConfig } from "./emailService";
 import { generateXmlsExcel, generateSummaryExcel, generateExcelFilename } from "./excelExport";
-import { fetchCNPJData, cleanCnpj } from "./receitaWS";
+import { fetchCNPJData, cleanCnpj, isValidCnpjFormat } from "./receitaWS";
 import { getOrCreateCompanyByCnpj } from "./utils/companyAutoCreate";
 import { gerarDanfe, danfeExists, getDanfePath } from "./danfeService";
 import { testImapConnection } from "./emailTestService";
 import { checkEmailMonitor, checkAllActiveMonitors } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
 import * as contaboStorage from "./contaboStorage";
+import { apiKeyAuthMiddleware, generateApiKey } from "./middleware/apiKeyAuth";
 import {
   migrateXmlToContabo,
   migrateXmlsBatch,
@@ -57,6 +58,51 @@ type UploadProgressInfo = {
 };
 
 const uploadProgressMap = new Map<string, UploadProgressInfo>();
+
+type RateLimitEntry = {
+  count: number;
+  resetAt: number;
+};
+
+const publicApiKeyRateLimit = new Map<string, RateLimitEntry>();
+const PUBLIC_API_KEY_LIMIT = parseInt(process.env.PUBLIC_API_KEY_LIMIT || "10", 10);
+const PUBLIC_API_KEY_WINDOW_MS = parseInt(process.env.PUBLIC_API_KEY_WINDOW_MS || "60000", 10);
+
+function getClientIp(req: AuthRequest): string {
+  const forwarded = (req.headers["x-forwarded-for"] as string) || "";
+  const ip = forwarded.split(",")[0]?.trim();
+  return ip || req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function checkPublicApiKeyRateLimit(ip: string): { allowed: boolean; retryAfterMs?: number } {
+  const now = Date.now();
+  const entry = publicApiKeyRateLimit.get(ip);
+  if (!entry || now > entry.resetAt) {
+    publicApiKeyRateLimit.set(ip, { count: 1, resetAt: now + PUBLIC_API_KEY_WINDOW_MS });
+    return { allowed: true };
+  }
+
+  if (entry.count >= PUBLIC_API_KEY_LIMIT) {
+    return { allowed: false, retryAfterMs: entry.resetAt - now };
+  }
+
+  entry.count += 1;
+  return { allowed: true };
+}
+
+function formatDateYYYYMMDD(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+function generateBootstrapToken(secret: string, cnpj: string, dateStr: string): string {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`${cnpj}:${dateStr}`)
+    .digest("hex");
+}
 
 function initUploadProgress(uploadId: string, total: number, initialErrors = 0) {
   uploadProgressMap.set(uploadId, {
@@ -1891,6 +1937,178 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // API Keys Routes
+  app.post("/api/api-keys", authMiddleware, canAccessCompany(), async (req: AuthRequest, res) => {
+    try {
+      const { companyId, name } = req.body;
+
+      if (!companyId) {
+        return res.status(400).json({ error: "companyId é obrigatório" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+
+      const { rawKey, keyHash, keyPrefix } = generateApiKey();
+      const created = await storage.createApiKey({
+        companyId,
+        name: name || null,
+        keyHash,
+        keyPrefix,
+      });
+
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "create_api_key",
+        details: JSON.stringify({ companyId, apiKeyId: created.id }),
+      });
+
+      res.json({
+        id: created.id,
+        name: created.name,
+        keyPrefix: created.keyPrefix,
+        createdAt: created.createdAt,
+        apiKey: rawKey,
+      });
+    } catch (error) {
+      console.error("Create api key error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/api-keys", authMiddleware, canAccessCompany(), async (req: AuthRequest, res) => {
+    try {
+      const { companyId } = req.query;
+      if (!companyId || typeof companyId !== "string") {
+        return res.status(400).json({ error: "companyId é obrigatório" });
+      }
+
+      const keys = await storage.getApiKeysByCompany(companyId);
+      res.json(
+        keys.map((key) => ({
+          id: key.id,
+          name: key.name,
+          keyPrefix: key.keyPrefix,
+          createdAt: key.createdAt,
+          lastUsedAt: key.lastUsedAt,
+          revokedAt: key.revokedAt,
+        }))
+      );
+    } catch (error) {
+      console.error("List api keys error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/api-keys/:id", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const { id } = req.params;
+      const apiKey = await storage.getApiKey(id);
+      if (!apiKey) {
+        return res.status(404).json({ error: "API key not found" });
+      }
+
+      if (req.userRole !== "admin") {
+        const companies = await storage.getCompaniesByUser(req.user!.id);
+        const hasAccess = companies.some((c) => c.id === apiKey.companyId);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado" });
+        }
+      }
+
+      const revoked = await storage.revokeApiKey(id);
+      await storage.logAction({
+        userId: req.user!.id,
+        action: "revoke_api_key",
+        details: JSON.stringify({ apiKeyId: id, companyId: apiKey.companyId }),
+      });
+
+      res.json(revoked);
+    } catch (error) {
+      console.error("Revoke api key error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Public API Key bootstrap (no auth)
+  app.post("/api/public/api-key", async (req, res) => {
+    try {
+      const ip = getClientIp(req as AuthRequest);
+      const rate = checkPublicApiKeyRateLimit(ip);
+      if (!rate.allowed) {
+        const retryAfter = Math.ceil((rate.retryAfterMs || 0) / 1000);
+        res.setHeader("Retry-After", String(retryAfter));
+        return res.status(429).json({
+          error: "Rate limit exceeded",
+          message: "Muitas tentativas. Tente novamente mais tarde.",
+          retryAfter,
+        });
+      }
+
+      const { cnpj, token, name } = req.body || {};
+      const cleanedCnpj = typeof cnpj === "string" ? cleanCnpj(cnpj) : "";
+
+      if (!cleanedCnpj || !isValidCnpjFormat(cleanedCnpj) || typeof token !== "string") {
+        return res.status(400).json({
+          error: "Invalid payload",
+          message: "Informe cnpj válido (14 dígitos) e token.",
+        });
+      }
+
+      const secret = process.env.API_KEY_BOOTSTRAP_SECRET;
+      if (!secret) {
+        return res.status(500).json({
+          error: "Bootstrap secret not configured",
+          message: "API_KEY_BOOTSTRAP_SECRET não configurado.",
+        });
+      }
+
+      const today = new Date();
+      const todayStr = formatDateYYYYMMDD(today);
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+      const yesterdayStr = formatDateYYYYMMDD(yesterday);
+
+      const expectedToday = generateBootstrapToken(secret, cleanedCnpj, todayStr);
+      const expectedYesterday = generateBootstrapToken(secret, cleanedCnpj, yesterdayStr);
+
+      if (token !== expectedToday && token !== expectedYesterday) {
+        return res.status(401).json({
+          error: "Invalid token",
+          message: "Token inválido para o CNPJ informado.",
+        });
+      }
+
+      const company = await storage.getCompanyByCnpj(cleanedCnpj);
+      if (!company) {
+        return res.status(404).json({
+          error: "Company not found",
+          message: "Empresa não encontrada para o CNPJ informado.",
+        });
+      }
+
+      const { rawKey, keyHash, keyPrefix } = generateApiKey();
+      const created = await storage.createApiKey({
+        companyId: company.id,
+        name: typeof name === "string" && name.trim() ? name.trim() : "AutoBootstrap",
+        keyHash,
+        keyPrefix,
+      });
+
+      res.json({
+        id: created.id,
+        name: created.name,
+        keyPrefix: created.keyPrefix,
+        createdAt: created.createdAt,
+        apiKey: rawKey,
+      });
+    } catch (error) {
+      console.error("Public api key error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // Email Routes
   // Public global email info (authenticated)
   app.get("/api/email/global/public", authMiddleware, async (req: AuthRequest, res) => {
@@ -2816,6 +3034,239 @@ ${company.razaoSocial}
       });
       res.status(500).json({ 
         error: error instanceof Error ? error.message : "Internal server error" 
+      });
+    } finally {
+      const files = (req.files as Express.Multer.File[]) || [];
+      const cleanupSet = new Set<string>([
+        ...cleanupPaths,
+        ...files.map((f) => f.path),
+      ]);
+      await Promise.all(
+        Array.from(cleanupSet).map((p) => fs.rm(p, { recursive: true, force: true }).catch(() => {}))
+      );
+    }
+  });
+
+  // Upload events or inutilizações (API Key)
+  app.post("/api/api-xml-events/upload", apiKeyAuthMiddleware, upload.array("files", 50), async (req: AuthRequest, res) => {
+    let cleanupPaths: string[] = [];
+    try {
+      const files = req.files as Express.Multer.File[];
+      const apiCompany = req.apiCompany;
+
+      if (!apiCompany) {
+        return res.status(401).json({ error: "API company not found" });
+      }
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: "Nenhum arquivo enviado" });
+      }
+
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+      const expanded = await expandUploadedFiles(files);
+      cleanupPaths = expanded.cleanupPaths;
+
+      const results = {
+        success: [] as any[],
+        errors: [...expanded.errors],
+        total: expanded.totalFiles,
+        processed: expanded.errors.length,
+      };
+
+      if (uploadId) {
+        initUploadProgress(uploadId, expanded.totalFiles, expanded.errors.length);
+      }
+
+      for (const file of expanded.items) {
+        results.processed++;
+        try {
+          if (!file.originalname.toLowerCase().endsWith(".xml")) {
+            results.errors.push({
+              filename: file.originalname,
+              error: "Arquivo não é XML (extensão inválida)",
+              step: "validation",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const xmlContent = await fs.readFile(file.path, "utf-8");
+
+          if (!isValidEventXml(xmlContent)) {
+            results.errors.push({
+              filename: file.originalname,
+              error: "Arquivo não é um XML de evento ou inutilização válido",
+              step: "validation",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const parsedEvent = await parseEventOrInutilizacao(xmlContent);
+          const cnpj = parsedEvent.cnpj;
+
+          if (cnpj !== apiCompany.cnpj) {
+            results.errors.push({
+              filename: file.originalname,
+              error: `Empresa com CNPJ ${cnpj} não corresponde à empresa da API`,
+              step: "authorization",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          if (parsedEvent.tipo === "evento") {
+            const eventoData = parsedEvent as ParsedEventoData;
+            const duplicate = await storage.getDuplicateXmlEventForEvento({
+              companyId: apiCompany.id,
+              chaveNFe: eventoData.chaveNFe,
+              tipoEvento: eventoData.tipoEvento,
+              numeroSequencia: eventoData.numeroSequencia ?? null,
+              protocolo: eventoData.protocolo ?? null,
+              dataEvento: eventoData.dataEvento ?? null,
+              horaEvento: eventoData.horaEvento ?? null,
+            });
+            if (duplicate) {
+              results.errors.push({
+                filename: file.originalname,
+                error: "Evento já importado anteriormente",
+                step: "duplicate",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+
+            const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+            if (!saveResult.success) {
+              results.errors.push({
+                filename: file.originalname,
+                error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
+                step: "storage",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+            const savedPath = saveResult.filepath || "";
+            const xml = await storage.getXmlByChave(eventoData.chaveNFe);
+
+            await storage.createXmlEvent({
+              companyId: apiCompany.id,
+              chaveNFe: eventoData.chaveNFe,
+              xmlId: xml?.id || null,
+              tipoEvento: eventoData.tipoEvento,
+              codigoEvento: eventoData.codigoEvento,
+              dataEvento: eventoData.dataEvento,
+              horaEvento: eventoData.horaEvento,
+              numeroSequencia: eventoData.numeroSequencia,
+              protocolo: eventoData.protocolo,
+              justificativa: eventoData.justificativa || null,
+              correcao: eventoData.correcao || null,
+              ano: null,
+              serie: null,
+              numeroInicial: null,
+              numeroFinal: null,
+              cnpj: eventoData.cnpj,
+              modelo: eventoData.modelo,
+              filepath: savedPath,
+            });
+
+            if (eventoData.tipoEvento === "cancelamento" && xml) {
+              await storage.updateXml(xml.id, {
+                dataCancelamento: eventoData.dataEvento,
+              });
+            }
+
+            results.success.push({
+              filename: file.originalname,
+              tipo: "evento",
+              tipoEvento: eventoData.tipoEvento,
+              chaveNFe: eventoData.chaveNFe,
+              dataEvento: eventoData.dataEvento,
+            });
+          } else {
+            const inutData = parsedEvent as ParsedInutilizacaoData;
+            const duplicate = await storage.getDuplicateXmlEventForInutilizacao({
+              companyId: apiCompany.id,
+              modelo: inutData.modelo,
+              serie: inutData.serie,
+              numeroInicial: inutData.numeroInicial,
+              numeroFinal: inutData.numeroFinal,
+              protocolo: inutData.protocolo ?? null,
+              dataEvento: inutData.dataEvento ?? null,
+              horaEvento: inutData.horaEvento ?? null,
+            });
+            if (duplicate) {
+              results.errors.push({
+                filename: file.originalname,
+                error: "Inutilização já importada anteriormente",
+                step: "duplicate",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+
+            const saveResult = await saveEventXmlToContabo(xmlContent, parsedEvent);
+            if (!saveResult.success) {
+              results.errors.push({
+                filename: file.originalname,
+                error: saveResult.error || "Erro ao salvar evento no Contabo Storage",
+                step: "storage",
+              });
+              await fs.unlink(file.path).catch(() => {});
+              continue;
+            }
+            const savedPath = saveResult.filepath || "";
+
+            await storage.createXmlEvent({
+              companyId: apiCompany.id,
+              chaveNFe: null,
+              xmlId: null,
+              tipoEvento: "inutilizacao",
+              codigoEvento: null,
+              dataEvento: inutData.dataEvento,
+              horaEvento: inutData.horaEvento,
+              numeroSequencia: null,
+              protocolo: inutData.protocolo,
+              justificativa: inutData.justificativa,
+              correcao: null,
+              ano: inutData.ano,
+              serie: inutData.serie,
+              numeroInicial: inutData.numeroInicial,
+              numeroFinal: inutData.numeroFinal,
+              cnpj: inutData.cnpj,
+              modelo: inutData.modelo,
+              filepath: savedPath,
+            });
+
+            results.success.push({
+              filename: file.originalname,
+              tipo: "inutilizacao",
+              serie: inutData.serie,
+              numeroInicial: inutData.numeroInicial,
+              numeroFinal: inutData.numeroFinal,
+              dataEvento: inutData.dataEvento,
+            });
+          }
+
+          await fs.unlink(file.path).catch(() => {});
+        } catch (error) {
+          results.errors.push({
+            filename: file.originalname,
+            error: error instanceof Error ? error.message : "Erro desconhecido",
+            step: "processing",
+          });
+          await fs.unlink(file.path).catch(() => {});
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      logger.error("Erro no upload de eventos (API)", error instanceof Error ? error : new Error(String(error)), {
+        apiKeyId: req.apiKey?.id,
+        fileCount: (req.files as Express.Multer.File[])?.length || 0,
+      });
+      res.status(500).json({
+        error: error instanceof Error ? error.message : "Internal server error",
       });
     } finally {
       const files = (req.files as Express.Multer.File[]) || [];
@@ -4953,6 +5404,239 @@ ${company.razaoSocial}
         completeUploadProgress(uploadId);
       }
       res.status(500).json({ 
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : "Erro desconhecido",
+      });
+    } finally {
+      const files = (req.files as Express.Multer.File[]) || [];
+      const cleanupSet = new Set<string>([
+        ...cleanupPaths,
+        ...files.map((f) => f.path),
+      ]);
+      await Promise.all(
+        Array.from(cleanupSet).map((p) => fs.rm(p, { recursive: true, force: true }).catch(() => {}))
+      );
+    }
+  });
+
+  // Upload XMLs Route - API Key (Batch processing)
+  app.post("/api/api-upload", apiKeyAuthMiddleware, uploadFilesMiddleware, async (req: AuthRequest, res) => {
+    let cleanupPaths: string[] = [];
+    try {
+      const files = req.files as Express.Multer.File[];
+      const apiCompany = req.apiCompany;
+
+      if (!apiCompany) {
+        return res.status(401).json({ error: "API company not found" });
+      }
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: "No files uploaded" });
+      }
+
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+      const expanded = await expandUploadedFiles(files);
+      cleanupPaths = expanded.cleanupPaths;
+
+      const results = {
+        success: [] as any[],
+        errors: [...expanded.errors],
+        total: expanded.totalFiles,
+        processed: expanded.errors.length,
+      };
+
+      if (uploadId) {
+        initUploadProgress(uploadId, expanded.totalFiles, expanded.errors.length);
+      }
+
+      for (const file of expanded.items) {
+        let hadError = false;
+        try {
+          if (!file.originalname.toLowerCase().endsWith(".xml")) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: "Arquivo não é XML (extensão inválida)",
+              step: "validation",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const xmlContent = await fs.readFile(file.path, "utf-8");
+
+          if (!isValidNFeXml(xmlContent)) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: "Arquivo não é um XML de NFe/NFCe válido",
+              step: "validation",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const authorization = await getNfeAuthorizationStatus(xmlContent);
+          if (!authorization.authorized) {
+            hadError = true;
+            const motivo = authorization.motivo || "XML não autorizado";
+            const statusLabel = authorization.cStat ? `cStat ${authorization.cStat}` : "sem cStat";
+            results.errors.push({
+              filename: file.originalname,
+              error: `${motivo} (${statusLabel})`,
+              step: "sefaz",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          let parsedXml;
+          try {
+            parsedXml = await parseXmlContent(xmlContent);
+          } catch (parseError) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: parseError instanceof Error ? parseError.message : "Erro ao parsear XML",
+              step: "parse",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          if (!validateChave(parsedXml.chave)) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: "Chave de acesso inválida (deve ter 44 dígitos numéricos)",
+              step: "validation",
+              chave: parsedXml.chave,
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const matchesCompany =
+            parsedXml.cnpjEmitente === apiCompany.cnpj ||
+            (parsedXml.cnpjDestinatario && parsedXml.cnpjDestinatario === apiCompany.cnpj);
+
+          if (!matchesCompany) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: `CNPJ do XML não pertence à empresa da API (${apiCompany.cnpj})`,
+              step: "authorization",
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const existingInDb = await storage.getXmlByChave(parsedXml.chave);
+          if (existingInDb) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: "XML duplicado (chave já existe no banco de dados)",
+              step: "duplicate_check",
+              chave: parsedXml.chave,
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const existingInStorage = await storageFileExists(parsedXml.chave, "validated");
+          if (existingInStorage) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: "XML duplicado (arquivo já existe no storage)",
+              step: "duplicate_check",
+              chave: parsedXml.chave,
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          let categoria: "emitida" | "recebida";
+          if (parsedXml.cnpjEmitente === apiCompany.cnpj) {
+            categoria = "emitida";
+          } else {
+            categoria = "recebida";
+          }
+
+          const saveResult = await saveXmlToContabo(xmlContent, parsedXml);
+          if (!saveResult.success) {
+            hadError = true;
+            results.errors.push({
+              filename: file.originalname,
+              error: saveResult.error || "Erro ao salvar arquivo no Contabo Storage",
+              step: "storage",
+              chave: parsedXml.chave,
+            });
+            await fs.unlink(file.path).catch(() => {});
+            continue;
+          }
+
+          const xml = await storage.createXml({
+            companyId: null,
+            chave: parsedXml.chave,
+            numeroNota: parsedXml.numeroNota || null,
+            tipoDoc: parsedXml.tipoDoc,
+            dataEmissao: parsedXml.dataEmissao,
+            hora: parsedXml.hora || "00:00:00",
+            cnpjEmitente: parsedXml.cnpjEmitente,
+            cnpjDestinatario: parsedXml.cnpjDestinatario || null,
+            razaoSocialDestinatario: parsedXml.razaoSocialDestinatario || null,
+            totalNota: parsedXml.totalNota.toString(),
+            totalImpostos: parsedXml.totalImpostos.toString(),
+            categoria,
+            statusValidacao: "valido",
+            filepath: saveResult.filepath || "",
+          });
+
+          await fs.unlink(file.path).catch(() => {});
+
+          results.success.push({
+            filename: file.originalname,
+            chave: xml.chave,
+            id: xml.id,
+            categoria,
+            tipoDoc: xml.tipoDoc,
+            totalNota: xml.totalNota,
+            dataEmissao: xml.dataEmissao,
+          });
+        } catch (error) {
+          hadError = true;
+          console.error("API upload error:", file.originalname, error);
+          results.errors.push({
+            filename: file.originalname,
+            error: error instanceof Error ? error.message : "Erro desconhecido no processamento",
+            step: "processing",
+          });
+          await fs.unlink(file.path).catch(() => {});
+        } finally {
+          results.processed += 1;
+          if (uploadId) {
+            bumpUploadProgress(uploadId, hadError);
+          }
+        }
+      }
+
+      if (uploadId) {
+        completeUploadProgress(uploadId);
+      }
+
+      res.json({
+        ...results,
+        message: `Processados ${results.processed}/${results.total} arquivos. ${results.success.length} com sucesso, ${results.errors.length} com erro.`,
+      });
+    } catch (error) {
+      console.error("API upload error:", error);
+      const uploadId = (req.headers["x-upload-id"] as string) || "";
+      if (uploadId) {
+        completeUploadProgress(uploadId);
+      }
+      res.status(500).json({
         error: "Internal server error",
         message: error instanceof Error ? error.message : "Erro desconhecido",
       });

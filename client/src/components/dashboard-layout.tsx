@@ -35,6 +35,7 @@ import {
   ChevronDown,
   HardDrive,
   Trash2,
+  Key,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
@@ -94,6 +95,11 @@ const menuItems = [
     url: "/configuracoes/email-global",
     icon: Mail,
     adminOnly: true,
+  },
+  {
+    title: "API Keys",
+    url: "/configuracoes/api-keys",
+    icon: Key,
   },
   {
     title: "Logs de Verificação",
