@@ -56,6 +56,8 @@ app.use((req, res, next) => {
   log("Sistema de storage inicializado ✅");
 
   const server = await registerRoutes(app);
+  const serverTimeoutMs = parseInt(process.env.HTTP_SERVER_TIMEOUT_MS || "600000", 10);
+  server.setTimeout(serverTimeoutMs);
   let isEmailMonitorRunning = false;
 
   const runEmailMonitorCycle = async () => {

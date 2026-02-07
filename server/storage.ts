@@ -203,6 +203,7 @@ export interface IStorage {
   
   // XML Email History
   createXmlEmailHistory(history: InsertXmlEmailHistory): Promise<XmlEmailHistory>;
+  updateXmlEmailHistory(id: string, data: Partial<InsertXmlEmailHistory>): Promise<XmlEmailHistory | undefined>;
   getXmlEmailHistoryByCompany(companyId: string): Promise<any[]>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
@@ -1073,6 +1074,18 @@ export class DatabaseStorage implements IStorage {
   async createXmlEmailHistory(history: InsertXmlEmailHistory): Promise<XmlEmailHistory> {
     const [created] = await db.insert(xmlEmailHistory).values(history).returning();
     return created;
+  }
+
+  async updateXmlEmailHistory(
+    id: string,
+    data: Partial<InsertXmlEmailHistory>
+  ): Promise<XmlEmailHistory | undefined> {
+    const [updated] = await db
+      .update(xmlEmailHistory)
+      .set(data)
+      .where(eq(xmlEmailHistory.id, id))
+      .returning();
+    return updated || undefined;
   }
 
   async getXmlEmailHistoryByCompany(companyId: string): Promise<any[]> {

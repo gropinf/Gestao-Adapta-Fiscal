@@ -5833,76 +5833,98 @@ ${company.razaoSocial}
         }
       }
 
-      // Envia os XMLs por email
-      const result = await sendXmlsByEmail(
-        companyId,
-        periodStart,
-        periodEnd,
-        destinationEmail
-      );
-
-      if (!result.success) {
-        // Salva erro no histórico
-        await storage.createXmlEmailHistory({
-          companyId,
-          userId: user.id,
-          destinationEmail,
-          periodStart,
-          periodEnd,
-          xmlCount: 0,
-          zipFilename: "",
-          emailSubject: "",
-          status: "failed",
-          errorMessage: result.error || "Erro desconhecido",
-        });
-
-        return res.status(500).json({ 
-          error: result.error || "Erro ao enviar XMLs por email" 
-        });
-      }
-
-      // Registra no histórico
+      // Registra no histórico como processamento
       const history = await storage.createXmlEmailHistory({
         companyId,
         userId: user.id,
         destinationEmail,
         periodStart,
         periodEnd,
-        xmlCount: result.xmlCount,
-        zipFilename: result.zipFilename,
-        emailSubject: result.emailSubject,
-        status: "success",
+        xmlCount: 0,
+        zipFilename: "",
+        emailSubject: "",
+        status: "processing",
       });
 
-      // Log de auditoria
-      await storage.logAction({
-        userId: user.id,
-        action: "send_xml_email",
-        details: JSON.stringify({
-          companyId,
-          destinationEmail,
-          periodStart,
-          periodEnd,
-          xmlCount: result.xmlCount,
-          zipFilename: result.zipFilename,
-        }),
+      // Processa envio em background para não travar o usuário
+      setImmediate(async () => {
+        try {
+          const result = await sendXmlsByEmail(
+            companyId,
+            periodStart,
+            periodEnd,
+            destinationEmail
+          );
+
+          if (!result.success) {
+            await storage.updateXmlEmailHistory(history.id, {
+              status: "failed",
+              errorMessage: result.error || "Erro desconhecido",
+            });
+            return;
+          }
+
+          await storage.updateXmlEmailHistory(history.id, {
+            status: "success",
+            xmlCount: result.xmlCount,
+            zipFilename: result.zipFilename,
+            emailSubject: result.emailSubject,
+            errorMessage: null,
+          });
+
+          await storage.logAction({
+            userId: user.id,
+            action: "send_xml_email",
+            details: JSON.stringify({
+              companyId,
+              destinationEmail,
+              periodStart,
+              periodEnd,
+              xmlCount: result.xmlCount,
+              zipFilename: result.zipFilename,
+            }),
+          });
+        } catch (backgroundError: any) {
+          const errorMessage = backgroundError?.message || "Erro desconhecido";
+          await storage.updateXmlEmailHistory(history.id, {
+            status: "failed",
+            errorMessage,
+          });
+        }
       });
 
       res.json({
         success: true,
-        message: "XMLs enviados com sucesso!",
+        message: "Envio iniciado. O processamento ocorrerá em segundo plano.",
         data: {
-          xmlCount: result.xmlCount,
-          zipFilename: result.zipFilename,
-          emailSubject: result.emailSubject,
           history,
         },
       });
     } catch (error: any) {
       console.error("Erro ao enviar XMLs por email:", error);
+      const { companyId, periodStart, periodEnd, destinationEmail } = req.body || {};
+      const errorMessage = error?.message || "Erro desconhecido";
+      if (companyId && periodStart && periodEnd && destinationEmail) {
+        try {
+          await storage.createXmlEmailHistory({
+            companyId,
+            userId: req.user!.id,
+            destinationEmail,
+            periodStart,
+            periodEnd,
+            xmlCount: 0,
+            zipFilename: "",
+            emailSubject: "",
+            status: "failed",
+            errorMessage,
+          });
+        } catch (historyError) {
+          console.error("Erro ao registrar histórico de falha:", historyError);
+        }
+      }
       res.status(500).json({ 
         error: "Erro ao enviar XMLs por email",
-        message: error.message || "Erro desconhecido"
+        message: errorMessage,
       });
     }
   });

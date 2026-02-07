@@ -252,6 +252,14 @@ export default function EnvioXmlEmail() {
         </Badge>
       );
     } else {
+      if (status === "processing") {
+        return (
+          <Badge className="bg-yellow-100 text-yellow-700 border-yellow-300">
+            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+            Processando
+          </Badge>
+        );
+      }
       return (
         <Badge className="bg-red-100 text-red-700 border-red-300">
           <XCircle className="w-3 h-3 mr-1" />
