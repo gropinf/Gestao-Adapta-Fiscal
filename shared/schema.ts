@@ -271,6 +271,9 @@ export const xmlEmailHistory = pgTable("xml_email_history", {
   zipFilename: text("zip_filename").notNull(), // Nome do arquivo ZIP gerado
   emailSubject: text("email_subject").notNull(), // Assunto do email
   status: text("status").notNull().default("success"), // success, failed
+  currentStage: text("current_stage"),
+  lastMessage: text("last_message"),
+  progressUpdatedAt: timestamp("progress_updated_at"),
   errorMessage: text("error_message"), // Mensagem de erro (se houver)
   errorDetails: text("error_details"),
   errorStack: text("error_stack"),
@@ -289,6 +292,9 @@ export const xmlDownloadHistory = pgTable("xml_download_history", {
   includeNfce: boolean("include_nfce").default(true).notNull(),
   includeEvents: boolean("include_events").default(true).notNull(),
   status: text("status").notNull().default("processing"), // processing, success, failed
+  currentStage: text("current_stage"),
+  lastMessage: text("last_message"),
+  progressUpdatedAt: timestamp("progress_updated_at"),
   errorMessage: text("error_message"),
   errorDetails: text("error_details"),
   errorStack: text("error_stack"),

@@ -42,6 +42,9 @@ interface EmailHistoryItem {
   zipFilename: string;
   emailSubject: string;
   status: string;
+  currentStage?: string | null;
+  lastMessage?: string | null;
+  progressUpdatedAt?: string | null;
   errorMessage?: string;
   errorDetails?: string | null;
   errorStack?: string | null;
@@ -600,11 +603,28 @@ export default function EnvioXmlEmail() {
                                 Timeout
                               </Badge>
                             )}
+                            {item.currentStage && (
+                              <div className="text-xs text-muted-foreground">
+                                Etapa: {item.currentStage}
+                              </div>
+                            )}
                           </div>
                         ) : item.status === "processing" ? (
-                          <span className="text-xs text-muted-foreground">
-                            Processando há {getProcessingElapsed(item)}
-                          </span>
+                          <div className="space-y-1">
+                            <span className="text-xs text-muted-foreground">
+                              Processando há {getProcessingElapsed(item)}
+                            </span>
+                            {item.currentStage && (
+                              <div className="text-xs text-muted-foreground">
+                                Etapa: {item.currentStage}
+                              </div>
+                            )}
+                            {item.lastMessage && (
+                              <div className="text-xs text-muted-foreground truncate max-w-[220px]" title={item.lastMessage}>
+                                {item.lastMessage}
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}

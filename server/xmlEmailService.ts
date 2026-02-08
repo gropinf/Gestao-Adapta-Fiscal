@@ -298,12 +298,16 @@ export async function sendXmlsByEmail(
   companyId: string,
   periodStart: string,
   periodEnd: string,
-  destinationEmail: string
+  destinationEmail: string,
+  onStage?: (stage: string, message?: string) => void | Promise<void>
 ): Promise<XmlEmailResult> {
   let stage = "init";
   const setStage = (value: string) => {
     stage = value;
     console.log(`[XML Email] Etapa: ${value}`);
+    if (onStage) {
+      void onStage(value);
+    }
   };
   try {
     // 1. Busca a empresa

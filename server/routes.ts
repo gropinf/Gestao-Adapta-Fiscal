@@ -5876,16 +5876,30 @@ ${company.razaoSocial}
         zipFilename: "",
         emailSubject: "",
         status: "processing",
+        currentStage: "processing",
+        lastMessage: null,
+        progressUpdatedAt: new Date(),
       });
 
       // Processa envio em background para não travar o usuário
       setImmediate(async () => {
         try {
+          const updateEmailStage = async (stage: string, message?: string) => {
+            await storage.updateXmlEmailHistory(history.id, {
+              currentStage: stage,
+              lastMessage: message || null,
+              progressUpdatedAt: new Date(),
+            });
+          };
+
+          await updateEmailStage("init");
+
           const result = await sendXmlsByEmail(
             companyId,
             periodStart,
             periodEnd,
-            destinationEmail
+            destinationEmail,
+            updateEmailStage
           );
 
           if (!result.success) {
@@ -5894,6 +5908,9 @@ ${company.razaoSocial}
               errorMessage: result.error || "Erro desconhecido",
               errorDetails: result.errorDetails || null,
               errorStack: result.errorStack || null,
+              currentStage: "failed",
+              lastMessage: result.error || "Erro desconhecido",
+              progressUpdatedAt: new Date(),
             });
             return;
           }
@@ -5906,6 +5923,9 @@ ${company.razaoSocial}
             errorMessage: null,
             errorDetails: null,
             errorStack: null,
+            currentStage: "success",
+            lastMessage: null,
+            progressUpdatedAt: new Date(),
           });
 
           await storage.logAction({
@@ -5930,6 +5950,9 @@ ${company.razaoSocial}
               message: errorMessage,
             }),
             errorStack: backgroundError?.stack || null,
+            currentStage: "failed",
+            lastMessage: errorMessage,
+            progressUpdatedAt: new Date(),
           });
         }
       });
@@ -6058,6 +6081,9 @@ ${company.razaoSocial}
         includeNfce: !!includeNfce,
         includeEvents: !!includeEvents,
         status: "processing",
+        currentStage: "processing",
+        lastMessage: null,
+        progressUpdatedAt: new Date(),
         nfeCount: 0,
         nfceCount: 0,
         eventCount: 0,
@@ -6065,7 +6091,16 @@ ${company.razaoSocial}
 
       setImmediate(async () => {
         let stage = "init";
+        const updateDownloadStage = async (nextStage: string, message?: string) => {
+          stage = nextStage;
+          await storage.updateXmlDownloadHistory(history.id, {
+            currentStage: nextStage,
+            lastMessage: message || null,
+            progressUpdatedAt: new Date(),
+          });
+        };
         try {
+          await updateDownloadStage("load_company");
           const company = await storage.getCompanyById(companyId);
           if (!company) {
             throw new Error("Empresa não encontrada");
@@ -6083,12 +6118,12 @@ ${company.razaoSocial}
           const baseName = `xml_${company.cnpj}_${formatDateFilename(periodStart)}_${formatDateFilename(periodEnd)}_${sanitizeFilename(company.razaoSocial)}`;
           const cleanCnpj = contaboStorage.sanitizeCnpj(company.cnpj);
 
-          stage = "load_xmls";
+          await updateDownloadStage("load_xmls");
           const xmls = await storage.getXmlsByPeriod(companyId, periodStart, periodEnd);
           const nfeXmls = includeNfe ? xmls.filter((xml) => xml.tipoDoc === "NFe") : [];
           const nfceXmls = includeNfce ? xmls.filter((xml) => xml.tipoDoc === "NFCe") : [];
 
-          stage = "load_events";
+          await updateDownloadStage("load_events");
           const allEvents = includeEvents ? await storage.getXmlEventsByCompany(companyId) : [];
           const isWithinPeriod = (dateStr?: string | null) =>
             !!dateStr && dateStr >= periodStart && dateStr <= periodEnd;
@@ -6112,14 +6147,16 @@ ${company.razaoSocial}
 
           const uploadZip = async (filename: string, filepaths: string[]) => {
             if (filepaths.length === 0) return { url: null, count: 0 };
-            stage = `zip:${filename}`;
+            await updateDownloadStage("build_zip", filename);
             const entries = await buildZipEntries(filepaths);
             if (entries.length === 0) return { url: null, count: 0 };
             const zipPath = path.join("/tmp", filename);
+            await updateDownloadStage("create_zip", filename);
             await createZipFile(entries, zipPath);
             const buffer = await fs.readFile(zipPath);
             await fs.unlink(zipPath).catch(() => {});
             const key = `${cleanCnpj}/downloads/xmls/${filename}`;
+            await updateDownloadStage("upload_storage", filename);
             const upload = await contaboStorage.uploadFile(buffer, key, "application/zip");
             if (!upload.success || !upload.url) {
               throw new Error(upload.error || "Erro ao salvar ZIP no storage");
@@ -6127,17 +6164,17 @@ ${company.razaoSocial}
             return { url: upload.url, count: entries.length };
           };
 
-          stage = "zip_nfe";
+          await updateDownloadStage("zip_nfe");
           const nfeResult = includeNfe
             ? await uploadZip(`${baseName}_NFE.zip`, nfeXmls.map((x) => x.filepath))
             : { url: null, count: 0 };
 
-          stage = "zip_nfce";
+          await updateDownloadStage("zip_nfce");
           const nfceResult = includeNfce
             ? await uploadZip(`${baseName}_NFCE.zip`, nfceXmls.map((x) => x.filepath))
             : { url: null, count: 0 };
 
-          stage = "zip_events";
+          await updateDownloadStage("zip_events");
           const eventResult = includeEvents
             ? await uploadZip(`${baseName}_EVENTOS.zip`, events.map((e) => e.filepath))
             : { url: null, count: 0 };
@@ -6153,6 +6190,9 @@ ${company.razaoSocial}
             errorMessage: null,
             errorDetails: null,
             errorStack: null,
+            currentStage: "success",
+            lastMessage: null,
+            progressUpdatedAt: new Date(),
           });
         } catch (err: any) {
           const message = err?.message || "Erro desconhecido";
@@ -6161,6 +6201,9 @@ ${company.razaoSocial}
             errorMessage: message,
             errorDetails: JSON.stringify({ stage, message }),
             errorStack: err?.stack || null,
+            currentStage: "failed",
+            lastMessage: message,
+            progressUpdatedAt: new Date(),
           });
         }
       });

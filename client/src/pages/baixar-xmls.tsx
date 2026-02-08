@@ -41,6 +41,9 @@ interface DownloadHistoryItem {
   includeNfce: boolean;
   includeEvents: boolean;
   status: string;
+  currentStage?: string | null;
+  lastMessage?: string | null;
+  progressUpdatedAt?: string | null;
   errorMessage?: string | null;
   errorDetails?: string | null;
   errorStack?: string | null;
@@ -319,6 +322,7 @@ export default function BaixarXmls() {
                     <TableRow>
                       <TableHead>Status</TableHead>
                       <TableHead>Período</TableHead>
+                      <TableHead>Etapa</TableHead>
                       <TableHead>NFe</TableHead>
                       <TableHead>NFCe</TableHead>
                       <TableHead>Eventos</TableHead>
@@ -337,6 +341,14 @@ export default function BaixarXmls() {
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           {formatDate(item.periodStart)} até {formatDate(item.periodEnd)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {item.currentStage || "—"}
+                          {item.lastMessage && (
+                            <div className="truncate max-w-[220px]" title={item.lastMessage}>
+                              {item.lastMessage}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>{item.nfeCount}</TableCell>
                         <TableCell>{item.nfceCount}</TableCell>
