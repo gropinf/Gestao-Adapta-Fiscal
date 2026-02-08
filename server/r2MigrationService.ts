@@ -51,6 +51,9 @@ const processFile = async (
 
   let key: string | null = null;
   if (isUrl(filepath)) {
+    if (options.prefix && !filepath.startsWith(options.prefix)) {
+      return { migrated: false, skipped: true, cancelled: false };
+    }
     key = contaboStorage.getKeyFromPublicUrl(filepath);
   } else {
     key = guessKeyFromPath(filepath);

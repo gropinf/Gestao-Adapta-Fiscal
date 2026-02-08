@@ -129,7 +129,7 @@ export default function R2MigrationPage() {
                 id="prefix"
                 value={prefix}
                 onChange={(e) => setPrefix(e.target.value)}
-                placeholder="ex: 35190775000170/"
+                placeholder="ex: https://usc1.contabostorage.com/caixafacil/48718004000136/xml"
               />
             </div>
           </div>
