@@ -6148,11 +6148,25 @@ ${company.razaoSocial}
           const uploadZip = async (filename: string, filepaths: string[]) => {
             if (filepaths.length === 0) return { url: null, count: 0 };
             await updateDownloadStage("build_zip", filename);
-            const entries = await buildZipEntries(filepaths);
+            const entries = await buildZipEntries(filepaths, {
+              perFileTimeoutMs: 30000,
+              onProgress: async (progress) => {
+                await storage.updateXmlDownloadHistory(history.id, {
+                  currentStage: "build_zip",
+                  lastMessage: `${progress.status} ${progress.index}/${progress.total} ${progress.filepath}`,
+                  progressUpdatedAt: new Date(),
+                });
+              },
+            });
             if (entries.length === 0) return { url: null, count: 0 };
             const zipPath = path.join("/tmp", filename);
             await updateDownloadStage("create_zip", filename);
-            await createZipFile(entries, zipPath);
+            await Promise.race([
+              createZipFile(entries, zipPath),
+              new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error("Timeout ao criar ZIP")), 10 * 60 * 1000)
+              ),
+            ]);
             const buffer = await fs.readFile(zipPath);
             await fs.unlink(zipPath).catch(() => {});
             const key = `${cleanCnpj}/downloads/xmls/${filename}`;
@@ -6219,6 +6233,42 @@ ${company.razaoSocial}
         error: "Erro ao iniciar download",
         message: error?.message || "Erro desconhecido",
       });
+    }
+  });
+
+  // POST /api/xml-downloads/:id/cancel - Marca download como cancelado/falha
+  app.post("/api/xml-downloads/:id/cancel", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const { id } = req.params;
+
+      const target = await storage.getXmlDownloadHistoryById(id);
+
+      if (!target) {
+        return res.status(404).json({ error: "Download não encontrado" });
+      }
+
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === target.companyId);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      await storage.updateXmlDownloadHistory(id, {
+        status: "failed",
+        errorMessage: "Cancelado pelo usuário",
+        errorDetails: JSON.stringify({ stage: "cancel", message: "Cancelado pelo usuário" }),
+        currentStage: "failed",
+        lastMessage: "Cancelado pelo usuário",
+        progressUpdatedAt: new Date(),
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Erro ao cancelar download:", error);
+      res.status(500).json({ error: "Erro ao cancelar download" });
     }
   });
 

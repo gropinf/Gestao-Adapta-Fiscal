@@ -10,27 +10,83 @@ type ZipEntry = {
   buffer?: Buffer;
 };
 
-export async function buildZipEntries(filepaths: string[]): Promise<ZipEntry[]> {
-  const entries: ZipEntry[] = [];
+type ZipProgress = {
+  index: number;
+  total: number;
+  filepath: string;
+  status: "start" | "ok" | "skip" | "error";
+  message?: string;
+};
 
-  for (const filepath of filepaths) {
+type BuildZipOptions = {
+  onProgress?: (progress: ZipProgress) => void | Promise<void>;
+  perFileTimeoutMs?: number;
+};
+
+export async function buildZipEntries(
+  filepaths: string[],
+  options: BuildZipOptions = {}
+): Promise<ZipEntry[]> {
+  const entries: ZipEntry[] = [];
+  const total = filepaths.length;
+  const perFileTimeoutMs = options.perFileTimeoutMs ?? 30000;
+
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number) => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout de ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+  };
+
+  for (const [index, filepath] of filepaths.entries()) {
+    await options.onProgress?.({ index: index + 1, total, filepath, status: "start" });
     if (isContaboUrl(filepath)) {
-      const buffer = await readXmlBuffer(filepath);
-      if (!buffer) {
-        console.warn(`Arquivo XML não encontrado no Contabo: ${filepath}`);
+      try {
+        const buffer = await withTimeout(readXmlBuffer(filepath), perFileTimeoutMs);
+        if (!buffer) {
+          console.warn(`Arquivo XML não encontrado no Contabo: ${filepath}`);
+          await options.onProgress?.({
+            index: index + 1,
+            total,
+            filepath,
+            status: "skip",
+            message: "Arquivo não encontrado no Contabo",
+          });
+          continue;
+        }
+        const name = path.basename(new URL(filepath).pathname);
+        entries.push({ name, buffer });
+        await options.onProgress?.({ index: index + 1, total, filepath, status: "ok" });
+        continue;
+      } catch (error: any) {
+        console.warn(`Erro ao ler XML do Contabo: ${filepath}`, error);
+        await options.onProgress?.({
+          index: index + 1,
+          total,
+          filepath,
+          status: "error",
+          message: error?.message || "Erro ao ler arquivo do Contabo",
+        });
         continue;
       }
-      const name = path.basename(new URL(filepath).pathname);
-      entries.push({ name, buffer });
-      continue;
     }
 
     const resolved = path.resolve(filepath);
     try {
-      await fs.access(resolved);
+      await withTimeout(fs.access(resolved), perFileTimeoutMs);
       entries.push({ name: path.basename(resolved), path: resolved });
+      await options.onProgress?.({ index: index + 1, total, filepath, status: "ok" });
     } catch {
       console.warn(`Arquivo XML não encontrado: ${resolved}`);
+      await options.onProgress?.({
+        index: index + 1,
+        total,
+        filepath,
+        status: "skip",
+        message: "Arquivo não encontrado",
+      });
     }
   }
 

@@ -213,6 +213,7 @@ export interface IStorage {
   createXmlDownloadHistory(history: InsertXmlDownloadHistory): Promise<XmlDownloadHistory>;
   updateXmlDownloadHistory(id: string, data: Partial<InsertXmlDownloadHistory>): Promise<XmlDownloadHistory | undefined>;
   getXmlDownloadHistoryByCompany(companyId: string): Promise<any[]>;
+  getXmlDownloadHistoryById(id: string): Promise<XmlDownloadHistory | undefined>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1181,6 +1182,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(xmlDownloadHistory.createdAt));
 
     return results;
+  }
+
+  async getXmlDownloadHistoryById(id: string): Promise<XmlDownloadHistory | undefined> {
+    const [result] = await db
+      .select()
+      .from(xmlDownloadHistory)
+      .where(eq(xmlDownloadHistory.id, id));
+    return result || undefined;
   }
 
   async getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]> {

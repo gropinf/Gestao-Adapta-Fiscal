@@ -67,6 +67,7 @@ export default function BaixarXmls() {
   const [includeNfe, setIncludeNfe] = useState(true);
   const [includeNfce, setIncludeNfce] = useState(true);
   const [includeEvents, setIncludeEvents] = useState(true);
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const {
     register,
@@ -111,6 +112,7 @@ export default function BaixarXmls() {
     const hasProcessing = history.some((item) => item.status === "processing");
     if (!hasProcessing) return;
     const interval = setInterval(() => {
+      setNowTick(Date.now());
       loadHistory().catch(() => {});
     }, 30000);
     return () => clearInterval(interval);
@@ -203,6 +205,50 @@ export default function BaixarXmls() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  };
+
+  const formatDuration = (ms: number): string => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [
+      hours > 0 ? `${hours}h` : null,
+      `${minutes}m`,
+      `${seconds}s`,
+    ].filter(Boolean);
+    return parts.join(" ");
+  };
+
+  const getLastUpdateElapsed = (item: DownloadHistoryItem): string => {
+    if (!item.progressUpdatedAt) return "";
+    const updated = new Date(item.progressUpdatedAt).getTime();
+    return formatDuration(nowTick - updated);
+  };
+
+  const handleCancel = async (id: string) => {
+    try {
+      const res = await fetch(`/api/xml-downloads/${id}/cancel`, {
+        method: "POST",
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || "Erro ao cancelar download");
+      }
+      await loadHistory();
+      toast({
+        title: "Download cancelado",
+        description: "O processamento foi cancelado.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Erro",
+        description: error.message || "Erro ao cancelar download",
+        variant: "destructive",
+      });
+    }
   };
 
   if (!selectedCompany) {
@@ -328,6 +374,7 @@ export default function BaixarXmls() {
                       <TableHead>Eventos</TableHead>
                       <TableHead>Downloads</TableHead>
                       <TableHead>Data/Hora</TableHead>
+                      <TableHead>Atualização</TableHead>
                       <TableHead className="text-right">Detalhes</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -380,6 +427,23 @@ export default function BaixarXmls() {
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           {formatDateTime(item.createdAt)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {item.progressUpdatedAt
+                            ? `há ${getLastUpdateElapsed(item)}`
+                            : "—"}
+                          {item.status === "processing" && (
+                            <div className="mt-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                onClick={() => handleCancel(item.id)}
+                              >
+                                Cancelar
+                              </Button>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           {(item.errorDetails || item.errorStack) && (
