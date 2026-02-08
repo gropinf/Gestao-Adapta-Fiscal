@@ -6309,7 +6309,15 @@ ${company.razaoSocial}
 
   app.post("/api/r2-migration/run", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
-      const { dryRun, deleteFromContabo, batchSize, prefix } = req.body || {};
+      const { dryRun, deleteFromContabo, batchSize, prefix, companyId, filepathUrlPrefix } = req.body || {};
+      if (!companyId) {
+        return res.status(400).json({ error: "companyId é obrigatório" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
 
       const run = await storage.createR2MigrationRun({
         status: "processing",
@@ -6331,6 +6339,8 @@ ${company.razaoSocial}
             deleteFromContabo: !!deleteFromContabo,
             batchSize: Number(batchSize) || 200,
             prefix: prefix || null,
+            companyCnpj: company.cnpj,
+            filepathUrlPrefix: filepathUrlPrefix || "https://usc1.contabostorage.com/caixafacil",
           });
         } catch (error: any) {
           await storage.updateR2MigrationRun(run.id, {
@@ -7021,8 +7031,8 @@ ${company.razaoSocial}
       // Listar todos os arquivos da empresa
       const files = await contaboStorage.listAllByCompany(company.cnpj);
       
-      const xmlFiles = files.filter(f => f.key.includes('/xmls/'));
-      const imageFiles = files.filter(f => !f.key.includes('/xmls/'));
+      const xmlFiles = files.filter((f) => f.key.includes("/xml/") || f.key.includes("/xml_events/"));
+      const imageFiles = files.filter((f) => !f.key.includes("/xml/") && !f.key.includes("/xml_events/"));
 
       const totalSize = files.reduce((acc, f) => acc + f.size, 0);
       const xmlSize = xmlFiles.reduce((acc, f) => acc + f.size, 0);

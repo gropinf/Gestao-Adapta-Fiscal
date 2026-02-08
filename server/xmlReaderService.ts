@@ -46,7 +46,7 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
   try {
     if (isStorageUrl(filepath)) {
       // É URL do storage - baixa do storage
-      // A key contém o CNPJ na estrutura: {CNPJ}/xml/{chave}.xml
+      // A key contém o CNPJ na estrutura: {CNPJ}/xml/YYYYMM/{chave}.xml
       const key = extractKeyFromStorageUrl(filepath);
       if (!key) {
         console.error(`Não foi possível extrair a chave da URL do Storage: ${filepath}`);

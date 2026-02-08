@@ -5,6 +5,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { apiRequest } from "../lib/queryClient";
+import { useAuthStore } from "../lib/auth";
 
 type R2MigrationRun = {
   id: string;
@@ -28,10 +29,36 @@ export default function R2MigrationPage() {
   const [deleteFromContabo, setDeleteFromContabo] = useState(false);
   const [batchSize, setBatchSize] = useState(200);
   const [prefix, setPrefix] = useState("");
+  const [filepathUrlPrefix, setFilepathUrlPrefix] = useState(
+    "https://usc1.contabostorage.com/caixafacil"
+  );
+  const [autoPrefix, setAutoPrefix] = useState(true);
   const [confirmText, setConfirmText] = useState("");
   const [running, setRunning] = useState(false);
   const [latest, setLatest] = useState<R2MigrationRun | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
+
+  useEffect(() => {
+    const loadCompanyPrefix = async () => {
+      if (!currentCompanyId) return;
+      try {
+        const res = await apiRequest("GET", "/api/companies");
+        const data = await res.json();
+        const company = Array.isArray(data)
+          ? data.find((item: any) => item?.id === currentCompanyId)
+          : null;
+        if (company?.cnpj && autoPrefix) {
+          const cleanCnpj = String(company.cnpj).replace(/[^\d]/g, "");
+          setFilepathUrlPrefix(`https://usc1.contabostorage.com/caixafacil/${cleanCnpj}/xml`);
+        }
+      } catch (err: any) {
+        setError(err?.message || "Falha ao carregar empresa");
+      }
+    };
+
+    loadCompanyPrefix();
+  }, [currentCompanyId, autoPrefix]);
 
   const loadLatest = async () => {
     try {
@@ -62,6 +89,10 @@ export default function R2MigrationPage() {
 
   const startMigration = async () => {
     setError(null);
+    if (!currentCompanyId) {
+      setError("Selecione uma empresa para iniciar a migração.");
+      return;
+    }
     if (confirmText !== "MIGRAR") {
       setError("Digite MIGRAR para confirmar.");
       return;
@@ -73,6 +104,8 @@ export default function R2MigrationPage() {
         deleteFromContabo,
         batchSize,
         prefix: prefix.trim() || null,
+        filepathUrlPrefix: filepathUrlPrefix.trim() || null,
+        companyId: currentCompanyId,
       });
       const data = await res.json();
       setLatest(data.run || null);
@@ -131,6 +164,21 @@ export default function R2MigrationPage() {
                 onChange={(e) => setPrefix(e.target.value)}
                 placeholder="ex: https://usc1.contabostorage.com/caixafacil/48718004000136/xml"
               />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="filepathUrlPrefix">Prefixo base do Contabo</Label>
+            <Input
+              id="filepathUrlPrefix"
+              value={filepathUrlPrefix}
+              onChange={(e) => {
+                setAutoPrefix(false);
+                setFilepathUrlPrefix(e.target.value);
+              }}
+              placeholder="ex: https://usc1.contabostorage.com/caixafacil"
+            />
+            <div className="text-xs text-muted-foreground">
+              Usado para filtrar as URLs do storage antes de migrar.
             </div>
           </div>
 

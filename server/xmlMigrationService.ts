@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { storage } from './storage';
-import { uploadFile, sanitizeCnpj, getXmlUrl } from './contaboStorage';
+import { uploadFile, sanitizeCnpj, getXmlKey, getXmlUrl } from './contaboStorage';
 import { db } from './db';
 import { xmls } from '@shared/schema';
 import { like, or } from 'drizzle-orm';
@@ -138,7 +138,7 @@ async function migrateXmlBufferToContabo(
       };
     }
 
-    // 2. Gera a chave (key) no formato: {CNPJ}/xml/{chave}.xml
+    // 2. Gera a chave (key) no formato: {CNPJ}/xml/YYYYMM/{chave}.xml
     const cleanCnpj = sanitizeCnpj(cnpj);
     const cleanChave = xml.chave.replace(/[^\d]/g, '');
     
@@ -149,7 +149,7 @@ async function migrateXmlBufferToContabo(
       };
     }
 
-    const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
+    const key = getXmlKey(cleanCnpj, cleanChave);
 
     // 3. Faz upload para Contabo
     const uploadResult = await uploadFile(fileBuffer, key, 'application/xml');

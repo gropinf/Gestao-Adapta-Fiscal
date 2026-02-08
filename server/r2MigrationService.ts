@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { xmls, xmlEvents } from "../shared/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, like, or, sql } from "drizzle-orm";
 import * as contaboStorage from "./contaboStorage";
 import { storage } from "./storage";
 
@@ -9,6 +9,8 @@ type MigrationOptions = {
   deleteFromContabo: boolean;
   batchSize: number;
   prefix?: string | null;
+  companyCnpj: string;
+  filepathUrlPrefix: string;
 };
 
 const r2Endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT || "";
@@ -21,8 +23,10 @@ const isR2Url = (value?: string | null) =>
     value.includes("r2.cloudflarestorage.com"));
 
 const guessKeyFromPath = (value: string): string | null => {
-  const match = value.match(/(\d{14}\/xml\/\d{44}\.xml)/);
-  return match ? match[1] : null;
+  const xmlMatch = value.match(/(\d{14}\/xml\/(?:\d{6}|\d{4})\/\d{44}\.xml)/);
+  if (xmlMatch) return xmlMatch[1];
+  const eventMatch = value.match(/(\d{14}\/xml_events\/(?:\d{6}|\d{4})\/[^/]+\.xml)/);
+  return eventMatch ? eventMatch[1] : null;
 };
 
 const uploadToR2 = async (key: string, sourceBuffer: Buffer) => {
@@ -40,71 +44,109 @@ const isRunCancelled = async (runId: string) => {
 
 const processFile = async (
   runId: string,
-  id: string,
-  filepath: string,
-  table: "xmls" | "xml_events",
+  row:
+    | {
+        table: "xmls";
+        id: string;
+        filepath: string;
+        chave: string;
+        cnpjEmitente: string;
+        cnpjDestinatario: string | null;
+      }
+    | {
+        table: "xml_events";
+        id: string;
+        filepath: string;
+        cnpj: string | null;
+        chaveNFe: string | null;
+        dataEvento: string | null;
+      },
   options: MigrationOptions
 ) => {
   if (await isRunCancelled(runId)) {
     return { migrated: false, skipped: true, cancelled: true };
   }
 
-  let key: string | null = null;
+  let oldKey: string | null = null;
+  const filepath = row.filepath;
   if (isUrl(filepath)) {
-    if (options.prefix && !filepath.startsWith(options.prefix)) {
+    if (options.filepathUrlPrefix && !filepath.startsWith(options.filepathUrlPrefix)) {
       return { migrated: false, skipped: true, cancelled: false };
     }
-    key = contaboStorage.getKeyFromPublicUrl(filepath);
+    if (options.prefix && isUrl(options.prefix) && !filepath.startsWith(options.prefix)) {
+      return { migrated: false, skipped: true, cancelled: false };
+    }
+    oldKey = contaboStorage.getKeyFromPublicUrl(filepath);
   } else {
-    key = guessKeyFromPath(filepath);
+    oldKey = guessKeyFromPath(filepath);
   }
 
-  if (!key) {
+  if (!oldKey) {
     await storage.updateR2MigrationRun(runId, {
       lastKey: filepath,
-      lastMessage: `Key não encontrada (${table})`,
+      lastMessage: `Key não encontrada (${row.table})`,
     });
     return { migrated: false, skipped: true };
   }
 
-  if (options.prefix && !key.startsWith(options.prefix)) {
+  if (options.prefix && !isUrl(options.prefix) && !oldKey.startsWith(options.prefix)) {
     return { migrated: false, skipped: true };
   }
 
-  const existsR2 = await contaboStorage.fileExistsInR2(key);
+  let newKey = oldKey;
+  if (row.table === "xmls") {
+    const storageCnpj = row.cnpjEmitente || row.cnpjDestinatario || options.companyCnpj;
+    const { yearMonth } = contaboStorage.getYearMonthFromChave(row.chave);
+    const fallbackYearMonth = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+    newKey = `${storageCnpj}/xml/${yearMonth || fallbackYearMonth}/${row.chave}.xml`;
+  } else {
+    const storageCnpj = row.cnpj || options.companyCnpj;
+    const yearMonthFromChave = row.chaveNFe
+      ? contaboStorage.getYearMonthFromChave(row.chaveNFe).yearMonth
+      : null;
+    const yearMonthFromDate =
+      row.dataEvento && row.dataEvento.includes("-")
+        ? `${row.dataEvento.substring(0, 4)}${row.dataEvento.substring(5, 7)}`
+        : null;
+    const eventFolder = yearMonthFromChave || yearMonthFromDate || String(new Date().getFullYear());
+    const fileName = oldKey.split("/").pop() || `${row.id}.xml`;
+    newKey = `${storageCnpj}/xml_events/${eventFolder}/${fileName}`;
+  }
+
+  const existsR2 = await contaboStorage.fileExistsInR2(newKey);
   let uploaded = false;
 
   if (!existsR2) {
-    const contaboBuffer = await contaboStorage.getFileFromContabo(key);
+    const contaboBuffer = await contaboStorage.getFileFromContabo(oldKey);
     if (!contaboBuffer) {
       await storage.updateR2MigrationRun(runId, {
-        lastKey: key,
+        lastKey: oldKey,
         lastMessage: "Arquivo não encontrado no Contabo",
       });
       return { migrated: false, skipped: true };
     }
     if (!options.dryRun) {
-      await uploadToR2(key, contaboBuffer);
+      await uploadToR2(newKey, contaboBuffer);
       uploaded = true;
     }
   }
 
-  const newUrl = contaboStorage.getR2PublicUrl(key);
+  const newUrl = contaboStorage.getR2PublicUrl(newKey);
   if (!options.dryRun && !isR2Url(filepath)) {
-    if (table === "xmls") {
-      await db.update(xmls).set({ filepath: newUrl }).where(eq(xmls.id, id));
+    if (row.table === "xmls") {
+      await db.update(xmls).set({ filepath: newUrl }).where(eq(xmls.id, row.id));
     } else {
-      await db.update(xmlEvents).set({ filepath: newUrl }).where(eq(xmlEvents.id, id));
+      await db.update(xmlEvents).set({ filepath: newUrl }).where(eq(xmlEvents.id, row.id));
     }
   }
 
   if (!options.dryRun && options.deleteFromContabo && (existsR2 || uploaded)) {
-    await contaboStorage.deleteFileFromContabo(key);
+    await contaboStorage.deleteFileFromContabo(oldKey);
   }
 
   await storage.updateR2MigrationRun(runId, {
-    lastKey: key,
-    lastMessage: `OK (${table})`,
+    lastKey: newKey,
+    lastMessage: `OK (${row.table})`,
   });
 
   return { migrated: true, skipped: false, cancelled: false };
@@ -124,15 +166,39 @@ const migrateTable = async (runId: string, table: "xmls" | "xml_events", options
     const rows =
       table === "xmls"
         ? await db
-            .select({ id: xmls.id, filepath: xmls.filepath })
+            .select({
+              id: xmls.id,
+              filepath: xmls.filepath,
+              chave: xmls.chave,
+              cnpjEmitente: xmls.cnpjEmitente,
+              cnpjDestinatario: xmls.cnpjDestinatario,
+            })
             .from(xmls)
-            .where(sql`filepath is not null`)
+            .where(
+              and(
+                sql`filepath is not null`,
+                like(xmls.filepath, `${options.filepathUrlPrefix}%`),
+                or(eq(xmls.cnpjEmitente, options.companyCnpj), eq(xmls.cnpjDestinatario, options.companyCnpj))
+              )
+            )
             .limit(options.batchSize)
             .offset(offset)
         : await db
-            .select({ id: xmlEvents.id, filepath: xmlEvents.filepath })
+            .select({
+              id: xmlEvents.id,
+              filepath: xmlEvents.filepath,
+              cnpj: xmlEvents.cnpj,
+              chaveNFe: xmlEvents.chaveNFe,
+              dataEvento: xmlEvents.dataEvento,
+            })
             .from(xmlEvents)
-            .where(sql`filepath is not null`)
+            .where(
+              and(
+                sql`filepath is not null`,
+                like(xmlEvents.filepath, `${options.filepathUrlPrefix}%`),
+                eq(xmlEvents.cnpj, options.companyCnpj)
+              )
+            )
             .limit(options.batchSize)
             .offset(offset);
 
@@ -144,7 +210,10 @@ const migrateTable = async (runId: string, table: "xmls" | "xml_events", options
       }
 
       try {
-        const result = await processFile(runId, row.id, row.filepath as string, table, options);
+        const result =
+          table === "xmls"
+            ? await processFile(runId, { ...row, table: "xmls" }, options)
+            : await processFile(runId, { ...row, table: "xml_events" }, options);
         if (result.cancelled) {
           return { migrated, skipped, failed, totalProcessed: migrated + skipped + failed };
         }

@@ -113,6 +113,23 @@ export function sanitizeCnpj(cnpj: string): string {
   return cnpj.replace(/[^\d]/g, '');
 }
 
+export function getYearMonthFromChave(chave: string): { year: string | null; month: string | null; yearMonth: string | null } {
+  const cleanChave = chave.replace(/[^\d]/g, '');
+  if (cleanChave.length < 6) {
+    return { year: null, month: null, yearMonth: null };
+  }
+
+  const year2 = cleanChave.substring(2, 4);
+  const month = cleanChave.substring(4, 6);
+  const monthNumber = Number(month);
+  if (!year2 || Number.isNaN(monthNumber) || monthNumber < 1 || monthNumber > 12) {
+    return { year: null, month: null, yearMonth: null };
+  }
+
+  const year = `20${year2}`;
+  return { year, month, yearMonth: `${year}${month}` };
+}
+
 export function extractChaveAcessoFromXml(xmlContent: string): string | null {
   const infNFeMatch = xmlContent.match(/<infNFe[^>]*Id="NFe(\d{44})"/);
   if (infNFeMatch) {
@@ -197,7 +214,9 @@ export async function uploadXml(
     };
   }
   
-  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
+  const { yearMonth } = getYearMonthFromChave(cleanChave);
+  const fallbackYearMonth = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const key = `${cleanCnpj}/xml/${yearMonth || fallbackYearMonth}/${cleanChave}.xml`;
   
   const buffer = typeof xmlContent === 'string' 
     ? Buffer.from(xmlContent, 'utf-8') 
@@ -467,13 +486,10 @@ export async function getSignedDownloadUrl(key: string, expiresIn: number = 3600
 }
 
 export async function getXmlUrl(cnpj: string, chaveAcesso: string): Promise<string> {
-  const cleanCnpj = sanitizeCnpj(cnpj);
-  const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
-  
   const bucket = getR2Bucket();
   const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
-  
+
+  const key = getXmlKey(cnpj, chaveAcesso);
   return `${endpoint}/${bucket}/${key}`;
 }
 
@@ -670,17 +686,16 @@ export async function fileExistsInContabo(key: string): Promise<boolean> {
 }
 
 export async function xmlExists(cnpj: string, chaveAcesso: string): Promise<boolean> {
-  const cleanCnpj = sanitizeCnpj(cnpj);
-  const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
-  
+  const key = getXmlKey(cnpj, chaveAcesso);
   return fileExists(key);
 }
 
 export function getXmlKey(cnpj: string, chaveAcesso: string): string {
   const cleanCnpj = sanitizeCnpj(cnpj);
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
-  return `${cleanCnpj}/xmls/${cleanChave}.xml`;
+  const { yearMonth } = getYearMonthFromChave(cleanChave);
+  const fallbackYearMonth = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  return `${cleanCnpj}/xml/${yearMonth || fallbackYearMonth}/${cleanChave}.xml`;
 }
 
 export async function uploadImage(

@@ -3,13 +3,22 @@
  * Substitui o uso de fileStorage.saveToValidated
  */
 
-import { uploadFile, sanitizeCnpj } from './contaboStorage';
+import { uploadFile, sanitizeCnpj, getXmlKey, getYearMonthFromChave } from './contaboStorage';
 import type { ParsedXmlData } from './xmlParser';
 import type { ParsedEventoData, ParsedInutilizacaoData } from './xmlEventParser';
 
+const getYearMonthFromDate = (dateStr?: string | null) => {
+  if (!dateStr || !dateStr.includes("-")) return null;
+  const [year, month] = dateStr.split("-");
+  if (!year || !month) return null;
+  const monthNumber = Number(month);
+  if (Number.isNaN(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
+  return { year, month, yearMonth: `${year}${month}` };
+};
+
 /**
  * Salva um XML de NFe no Contabo Storage
- * Organiza por CNPJ (emitente ou destinatário) na estrutura: {CNPJ}/xml/{chave}.xml
+ * Organiza por CNPJ (emitente ou destinatário) na estrutura: {CNPJ}/xml/YYYYMM/{chave}.xml
  * 
  * @param xmlContent - Conteúdo do XML (string ou Buffer)
  * @param parsedXml - Dados parseados do XML (para obter CNPJ e chave)
@@ -54,8 +63,8 @@ export async function saveXmlToContabo(
       ? Buffer.from(xmlContent, 'utf-8') 
       : xmlContent;
     
-    // Estrutura: {CNPJ}/xml/{chave}.xml (singular, conforme guia)
-    const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
+    // Estrutura: {CNPJ}/xml/YYYYMM/{chave}.xml
+    const key = getXmlKey(cleanCnpj, cleanChave);
     
     const result = await uploadFile(buffer, key, 'application/xml');
     
@@ -83,7 +92,7 @@ export async function saveXmlToContabo(
 
 /**
  * Salva um XML de evento (cancelamento, carta de correção, inutilização) no Contabo Storage
- * Organiza por CNPJ na estrutura: {CNPJ}/xml/eventos/{tipo}-{identificador}.xml
+ * Organiza por CNPJ na estrutura: {CNPJ}/xml_events/YYYYMM/{tipo}-{identificador}.xml
  * 
  * @param xmlContent - Conteúdo do XML (string ou Buffer)
  * @param parsedEvent - Dados parseados do evento
@@ -123,9 +132,16 @@ export async function saveEventXmlToContabo(
       fileName = `inutilizacao-${cleanCnpj}-${inut.ano}-${inut.serie}-${inut.numeroInicial}-${inut.numeroFinal}.xml`;
     }
     
-    // Estrutura: {CNPJ}/xml/eventos/{fileName}
-    // O CNPJ usado é sempre o do evento
-    const key = `${cleanCnpj}/xml/eventos/${fileName}`;
+    const yearMonthFromChave =
+      parsedEvent.tipo === "evento"
+        ? getYearMonthFromChave((parsedEvent as ParsedEventoData).chaveNFe)
+        : null;
+    const yearMonthFromDate = getYearMonthFromDate(parsedEvent.dataEvento);
+    const yearMonthFolder = yearMonthFromChave?.yearMonth || yearMonthFromDate?.yearMonth;
+    const fallbackYear = String(new Date().getFullYear());
+
+    // Estrutura: {CNPJ}/xml_events/YYYYMM/{fileName} (ou YYYY se faltar ano/mes)
+    const key = `${cleanCnpj}/xml_events/${yearMonthFolder || fallbackYear}/${fileName}`;
     
     console.log(`[Contabo Storage] Salvando evento XML usando CNPJ do evento: ${cleanCnpj} -> ${key}`);
     

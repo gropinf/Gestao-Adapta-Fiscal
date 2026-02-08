@@ -6,6 +6,7 @@ import {
   fileExistsInR2,
   uploadFile,
   deleteFileFromContabo,
+  getYearMonthFromChave,
 } from "../contaboStorage";
 import { db } from "../db";
 import { xmls, xmlEvents } from "../../shared/schema";
@@ -25,8 +26,10 @@ const isR2Url = (value?: string | null) =>
     value.includes("r2.cloudflarestorage.com"));
 
 const guessKeyFromPath = (value: string): string | null => {
-  const match = value.match(/(\d{14}\/xml\/\d{44}\.xml)/);
-  return match ? match[1] : null;
+  const xmlMatch = value.match(/(\d{14}\/xml\/(?:\d{6}|\d{4})\/\d{44}\.xml)/);
+  if (xmlMatch) return xmlMatch[1];
+  const eventMatch = value.match(/(\d{14}\/xml_events\/(?:\d{6}|\d{4})\/[^/]+\.xml)/);
+  return eventMatch ? eventMatch[1] : null;
 };
 
 const uploadToR2 = async (key: string, sourceBuffer: Buffer) => {
@@ -37,46 +40,83 @@ const uploadToR2 = async (key: string, sourceBuffer: Buffer) => {
   return upload.url || getR2PublicUrl(key);
 };
 
-const processFile = async (id: string, filepath: string, table: "xmls" | "xml_events") => {
-  let key: string | null = null;
+const processFile = async (
+  row:
+    | {
+        table: "xmls";
+        id: string;
+        filepath: string;
+        chave: string;
+        cnpjEmitente: string;
+        cnpjDestinatario: string | null;
+      }
+    | {
+        table: "xml_events";
+        id: string;
+        filepath: string;
+        cnpj: string | null;
+        chaveNFe: string | null;
+        dataEvento: string | null;
+      }
+) => {
+  let oldKey: string | null = null;
+  const filepath = row.filepath;
 
   if (isUrl(filepath)) {
-    key = getKeyFromPublicUrl(filepath);
+    oldKey = getKeyFromPublicUrl(filepath);
   } else {
-    key = guessKeyFromPath(filepath);
+    oldKey = guessKeyFromPath(filepath);
   }
 
-  if (!key) {
-    console.warn(`[DB MIGRATION] Key não encontrada (${table}): ${id}`);
+  if (!oldKey) {
+    console.warn(`[DB MIGRATION] Key não encontrada (${row.table}): ${row.id}`);
     return { migrated: false, skipped: true };
   }
 
-  const newUrl = getR2PublicUrl(key);
-  const existsR2 = await fileExistsInR2(key);
+  let newKey = oldKey;
+  if (row.table === "xmls") {
+    const storageCnpj = row.cnpjEmitente || row.cnpjDestinatario;
+    const { yearMonth } = getYearMonthFromChave(row.chave);
+    const fallbackYearMonth = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+    newKey = `${storageCnpj}/xml/${yearMonth || fallbackYearMonth}/${row.chave}.xml`;
+  } else {
+    const storageCnpj = row.cnpj || "unknown";
+    const yearMonthFromChave = row.chaveNFe ? getYearMonthFromChave(row.chaveNFe).yearMonth : null;
+    const yearMonthFromDate =
+      row.dataEvento && row.dataEvento.includes("-")
+        ? `${row.dataEvento.substring(0, 4)}${row.dataEvento.substring(5, 7)}`
+        : null;
+    const eventFolder = yearMonthFromChave || yearMonthFromDate || String(new Date().getFullYear());
+    const fileName = oldKey.split("/").pop() || `${row.id}.xml`;
+    newKey = `${storageCnpj}/xml_events/${eventFolder}/${fileName}`;
+  }
+
+  const newUrl = getR2PublicUrl(newKey);
+  const existsR2 = await fileExistsInR2(newKey);
   let uploaded = false;
 
   if (!existsR2) {
-    const contaboBuffer = await getFileFromContabo(key);
+    const contaboBuffer = await getFileFromContabo(oldKey);
     if (!contaboBuffer) {
-      console.warn(`[DB MIGRATION] Arquivo não encontrado no Contabo: ${key}`);
+      console.warn(`[DB MIGRATION] Arquivo não encontrado no Contabo: ${oldKey}`);
       return { migrated: false, skipped: true };
     }
     if (!dryRun) {
-      await uploadToR2(key, contaboBuffer);
+      await uploadToR2(newKey, contaboBuffer);
       uploaded = true;
     }
   }
 
   if (!dryRun && filepath !== newUrl) {
-    if (table === "xmls") {
-      await db.update(xmls).set({ filepath: newUrl }).where(eq(xmls.id, id));
+    if (row.table === "xmls") {
+      await db.update(xmls).set({ filepath: newUrl }).where(eq(xmls.id, row.id));
     } else {
-      await db.update(xmlEvents).set({ filepath: newUrl }).where(eq(xmlEvents.id, id));
+      await db.update(xmlEvents).set({ filepath: newUrl }).where(eq(xmlEvents.id, row.id));
     }
   }
 
   if (!dryRun && deleteFromContabo && (existsR2 || uploaded)) {
-    await deleteFileFromContabo(key);
+    await deleteFileFromContabo(oldKey);
   }
 
   return { migrated: true, skipped: false };
@@ -92,13 +132,25 @@ const migrateTable = async (table: "xmls" | "xml_events") => {
     const rows =
       table === "xmls"
         ? await db
-            .select({ id: xmls.id, filepath: xmls.filepath })
+            .select({
+              id: xmls.id,
+              filepath: xmls.filepath,
+              chave: xmls.chave,
+              cnpjEmitente: xmls.cnpjEmitente,
+              cnpjDestinatario: xmls.cnpjDestinatario,
+            })
             .from(xmls)
             .where(sql`filepath is not null`)
             .limit(batchSize)
             .offset(offset)
         : await db
-            .select({ id: xmlEvents.id, filepath: xmlEvents.filepath })
+            .select({
+              id: xmlEvents.id,
+              filepath: xmlEvents.filepath,
+              cnpj: xmlEvents.cnpj,
+              chaveNFe: xmlEvents.chaveNFe,
+              dataEvento: xmlEvents.dataEvento,
+            })
             .from(xmlEvents)
             .where(sql`filepath is not null`)
             .limit(batchSize)
@@ -108,7 +160,10 @@ const migrateTable = async (table: "xmls" | "xml_events") => {
 
     for (const row of rows) {
       try {
-        const result = await processFile(row.id, row.filepath as string, table);
+        const result =
+          table === "xmls"
+            ? await processFile({ ...row, table: "xmls" })
+            : await processFile({ ...row, table: "xml_events" });
         if (result.migrated) migrated++;
         if (result.skipped) skipped++;
       } catch (error: any) {
