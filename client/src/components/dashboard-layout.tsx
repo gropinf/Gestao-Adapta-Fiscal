@@ -135,6 +135,12 @@ const menuItems = [
     icon: Shield,
     adminOnly: true, // Apenas para admin
   },
+  {
+    title: "Migração R2",
+    url: "/r2-migration",
+    icon: HardDrive,
+    adminOnly: true,
+  },
 ];
 
 function AppSidebar() {

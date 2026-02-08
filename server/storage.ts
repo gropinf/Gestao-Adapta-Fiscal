@@ -18,6 +18,7 @@ import {
   emailCheckLogs,
   emailMonitorSeenUids,
   apiKeys,
+  r2MigrationRuns,
   type User,
   type InsertUser,
   type Company,
@@ -31,6 +32,8 @@ import {
   type InsertXmlEvent,
   type XmlDownloadHistory,
   type InsertXmlDownloadHistory,
+  type R2MigrationRun,
+  type InsertR2MigrationRun,
   type Action,
   type InsertAction,
   type Alert,
@@ -214,6 +217,11 @@ export interface IStorage {
   updateXmlDownloadHistory(id: string, data: Partial<InsertXmlDownloadHistory>): Promise<XmlDownloadHistory | undefined>;
   getXmlDownloadHistoryByCompany(companyId: string): Promise<any[]>;
   getXmlDownloadHistoryById(id: string): Promise<XmlDownloadHistory | undefined>;
+
+  // R2 Migration Runs
+  createR2MigrationRun(run: InsertR2MigrationRun): Promise<R2MigrationRun>;
+  updateR2MigrationRun(id: string, data: Partial<InsertR2MigrationRun>): Promise<R2MigrationRun | undefined>;
+  getLatestR2MigrationRun(): Promise<R2MigrationRun | undefined>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1190,6 +1198,33 @@ export class DatabaseStorage implements IStorage {
       .from(xmlDownloadHistory)
       .where(eq(xmlDownloadHistory.id, id));
     return result || undefined;
+  }
+
+  // R2 Migration Runs methods
+  async createR2MigrationRun(run: InsertR2MigrationRun): Promise<R2MigrationRun> {
+    const [created] = await db.insert(r2MigrationRuns).values(run).returning();
+    return created;
+  }
+
+  async updateR2MigrationRun(
+    id: string,
+    data: Partial<InsertR2MigrationRun>
+  ): Promise<R2MigrationRun | undefined> {
+    const [updated] = await db
+      .update(r2MigrationRuns)
+      .set(data)
+      .where(eq(r2MigrationRuns.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async getLatestR2MigrationRun(): Promise<R2MigrationRun | undefined> {
+    const [run] = await db
+      .select()
+      .from(r2MigrationRuns)
+      .orderBy(desc(r2MigrationRuns.startedAt))
+      .limit(1);
+    return run || undefined;
   }
 
   async getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]> {

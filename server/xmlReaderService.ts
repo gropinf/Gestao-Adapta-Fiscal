@@ -9,11 +9,9 @@ import { getFile } from './contaboStorage';
 /**
  * Verifica se um filepath é uma URL do Contabo Storage
  */
-export function isContaboUrl(filepath: string): boolean {
+export function isStorageUrl(filepath: string): boolean {
   if (!filepath) return false;
-  return filepath.includes('contabostorage.com') || 
-         filepath.startsWith('http://') || 
-         filepath.startsWith('https://');
+  return filepath.startsWith('http://') || filepath.startsWith('https://');
 }
 
 /**
@@ -21,7 +19,7 @@ export function isContaboUrl(filepath: string): boolean {
  * Exemplo: https://usc1.contabostorage.com/bucket/12345678000190/xml/12345678901234567890123456789012345678901234.xml
  * Retorna: 12345678000190/xml/12345678901234567890123456789012345678901234.xml
  */
-export function extractKeyFromContaboUrl(url: string): string | null {
+export function extractKeyFromStorageUrl(url: string): string | null {
   try {
     // Remove protocolo e domínio
     const urlObj = new URL(url);
@@ -46,12 +44,12 @@ export function extractKeyFromContaboUrl(url: string): string | null {
  */
 export async function readXmlContent(filepath: string): Promise<string | null> {
   try {
-    if (isContaboUrl(filepath)) {
-      // É URL do Contabo - baixa do storage
+    if (isStorageUrl(filepath)) {
+      // É URL do storage - baixa do storage
       // A key contém o CNPJ na estrutura: {CNPJ}/xml/{chave}.xml
-      const key = extractKeyFromContaboUrl(filepath);
+      const key = extractKeyFromStorageUrl(filepath);
       if (!key) {
-        console.error(`Não foi possível extrair a chave da URL do Contabo: ${filepath}`);
+        console.error(`Não foi possível extrair a chave da URL do Storage: ${filepath}`);
         return null;
       }
       
@@ -64,7 +62,7 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
       
       const buffer = await getFile(key);
       if (!buffer) {
-        console.error(`Arquivo não encontrado no Contabo Storage: ${key}`);
+        console.error(`Arquivo não encontrado no Storage: ${key}`);
         return null;
       }
       
@@ -88,11 +86,11 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
  */
 export async function readXmlBuffer(filepath: string): Promise<Buffer | null> {
   try {
-    if (isContaboUrl(filepath)) {
-      // É URL do Contabo - baixa do storage
-      const key = extractKeyFromContaboUrl(filepath);
+    if (isStorageUrl(filepath)) {
+      // É URL do storage - baixa do storage
+      const key = extractKeyFromStorageUrl(filepath);
       if (!key) {
-        console.error(`Não foi possível extrair a chave da URL do Contabo: ${filepath}`);
+        console.error(`Não foi possível extrair a chave da URL do Storage: ${filepath}`);
         return null;
       }
       

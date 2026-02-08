@@ -20,6 +20,7 @@ import { checkEmailMonitor, checkAllActiveMonitors } from "./emailMonitorService
 import { sendXmlsByEmail } from "./xmlEmailService";
 import { buildZipEntries, createZipFile } from "./xmlZipService";
 import * as contaboStorage from "./contaboStorage";
+import { runR2Migration } from "./r2MigrationService";
 import { apiKeyAuthMiddleware, generateApiKey } from "./middleware/apiKeyAuth";
 import {
   migrateXmlToContabo,
@@ -6021,7 +6022,26 @@ ${company.razaoSocial}
       }
 
       const history = await storage.getXmlDownloadHistoryByCompany(companyId);
-      res.json(history);
+
+      const withSignedUrls = await Promise.all(
+        history.map(async (item) => {
+          const withSigned = { ...item } as any;
+          const resolveSigned = async (url?: string | null) => {
+            if (!url) return null;
+            const key = contaboStorage.getKeyFromPublicUrl(url);
+            if (!key) return url;
+            const signed = await contaboStorage.getSignedDownloadUrl(key, 3600);
+            return signed || url;
+          };
+
+          withSigned.zipNfePath = await resolveSigned(item.zipNfePath);
+          withSigned.zipNfcePath = await resolveSigned(item.zipNfcePath);
+          withSigned.zipEventsPath = await resolveSigned(item.zipEventsPath);
+          return withSigned;
+        })
+      );
+
+      res.json(withSignedUrls);
     } catch (error: any) {
       console.error("Erro ao buscar histórico de downloads:", error);
       res.status(500).json({ error: "Erro ao buscar histórico de downloads" });
@@ -6233,6 +6253,108 @@ ${company.razaoSocial}
         error: "Erro ao iniciar download",
         message: error?.message || "Erro desconhecido",
       });
+    }
+  });
+
+  // POST /api/xml-downloads/:id/delete-files - Remove ZIPs do storage
+  app.post("/api/xml-downloads/:id/delete-files", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const { id } = req.params;
+
+      const target = await storage.getXmlDownloadHistoryById(id);
+      if (!target) {
+        return res.status(404).json({ error: "Download não encontrado" });
+      }
+
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === target.companyId);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      const deleteByUrl = async (url?: string | null) => {
+        if (!url) return false;
+        const key = contaboStorage.getKeyFromPublicUrl(url);
+        if (!key) return false;
+        return contaboStorage.deleteFile(key);
+      };
+
+      await Promise.all([
+        deleteByUrl(target.zipNfePath),
+        deleteByUrl(target.zipNfcePath),
+        deleteByUrl(target.zipEventsPath),
+      ]);
+
+      await storage.updateXmlDownloadHistory(id, {
+        zipNfePath: null,
+        zipNfcePath: null,
+        zipEventsPath: null,
+        lastMessage: "Arquivos removidos do storage",
+        progressUpdatedAt: new Date(),
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Erro ao deletar arquivos de download:", error);
+      res.status(500).json({ error: "Erro ao deletar arquivos de download" });
+    }
+  });
+
+  // ========================================
+  // R2 MIGRATION ROUTES - Migração Contabo -> R2
+  // ========================================
+
+  app.post("/api/r2-migration/run", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { dryRun, deleteFromContabo, batchSize, prefix } = req.body || {};
+
+      const run = await storage.createR2MigrationRun({
+        status: "processing",
+        dryRun: !!dryRun,
+        deleteFromContabo: !!deleteFromContabo,
+        batchSize: Number(batchSize) || 200,
+        prefix: prefix || null,
+        totalProcessed: 0,
+        migrated: 0,
+        skipped: 0,
+        failed: 0,
+        startedAt: new Date(),
+      });
+
+      setImmediate(async () => {
+        try {
+          await runR2Migration(run.id, {
+            dryRun: !!dryRun,
+            deleteFromContabo: !!deleteFromContabo,
+            batchSize: Number(batchSize) || 200,
+            prefix: prefix || null,
+          });
+        } catch (error: any) {
+          await storage.updateR2MigrationRun(run.id, {
+            status: "failed",
+            lastMessage: error?.message || "Erro desconhecido",
+            finishedAt: new Date(),
+          });
+        }
+      });
+
+      res.json({ success: true, run });
+    } catch (error: any) {
+      console.error("Erro ao iniciar migração R2:", error);
+      res.status(500).json({ error: "Erro ao iniciar migração R2" });
+    }
+  });
+
+  app.get("/api/r2-migration/latest", authMiddleware, isAdmin, async (_req: AuthRequest, res) => {
+    try {
+      const run = await storage.getLatestR2MigrationRun();
+      res.json(run || null);
+    } catch (error: any) {
+      console.error("Erro ao buscar status migração R2:", error);
+      res.status(500).json({ error: "Erro ao buscar status migração R2" });
     }
   });
 

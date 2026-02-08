@@ -39,6 +39,45 @@ const getBucket = () => {
   return bucket;
 };
 
+const getR2Client = () => {
+  const endpoint = process.env.R2_ENDPOINT;
+  const region = process.env.R2_REGION || 'auto';
+  const accessKeyId = process.env.R2_ACCESS_KEY;
+  const secretAccessKey = process.env.R2_SECRET_KEY;
+
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error('Configuração do R2 incompleta. Verifique as variáveis de ambiente.');
+  }
+
+  return new S3Client({
+    endpoint,
+    region,
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+    forcePathStyle: true,
+  });
+};
+
+const getR2Bucket = () => {
+  const bucket = process.env.R2_BUCKET;
+  if (!bucket) {
+    throw new Error('R2_BUCKET não configurado');
+  }
+  return bucket;
+};
+
+const shouldFallbackToContabo = () => {
+  return process.env.R2_FALLBACK_DISABLED !== 'true';
+};
+
+export function getR2PublicUrl(key: string): string {
+  const bucket = getR2Bucket();
+  const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
+  return `${endpoint}/${bucket}/${key}`;
+}
+
 export const ALLOWED_XML_TYPES = [
   'application/xml',
   'text/xml',
@@ -113,8 +152,8 @@ export async function uploadFile(
   contentType: string
 ): Promise<UploadResult> {
   try {
-    const client = getStorageClient();
-    const bucket = getBucket();
+    const client = getR2Client();
+    const bucket = getR2Bucket();
 
     const command = new PutObjectCommand({
       Bucket: bucket,
@@ -126,7 +165,7 @@ export async function uploadFile(
 
     await client.send(command);
 
-    const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+    const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
     const url = `${endpoint}/${bucket}/${key}`;
 
     return {
@@ -211,19 +250,70 @@ export async function uploadCompanyCertificate(
 }
 
 export async function deleteFile(key: string): Promise<boolean> {
+  let deleted = false;
+  try {
+    const client = getR2Client();
+    const bucket = getR2Bucket();
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
+    );
+    deleted = true;
+  } catch (error) {
+    console.error('Erro ao deletar arquivo no R2:', error);
+  }
+
+  if (shouldFallbackToContabo()) {
+    try {
+      const client = getStorageClient();
+      const bucket = getBucket();
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
+      );
+      deleted = true;
+    } catch (error) {
+      console.error('Erro ao deletar arquivo no Contabo:', error);
+    }
+  }
+
+  return deleted;
+}
+
+export async function deleteFileFromR2(key: string): Promise<boolean> {
+  try {
+    const client = getR2Client();
+    const bucket = getR2Bucket();
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
+    );
+    return true;
+  } catch (error) {
+    console.error('Erro ao deletar arquivo no R2:', error);
+    return false;
+  }
+}
+
+export async function deleteFileFromContabo(key: string): Promise<boolean> {
   try {
     const client = getStorageClient();
     const bucket = getBucket();
-
-    const command = new DeleteObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    });
-
-    await client.send(command);
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
+    );
     return true;
   } catch (error) {
-    console.error('Erro ao deletar arquivo:', error);
+    console.error('Erro ao deletar arquivo no Contabo:', error);
     return false;
   }
 }
@@ -238,41 +328,39 @@ export async function deleteXml(cnpj: string, chaveAcesso: string): Promise<bool
 
 export async function deleteAllByCompany(cnpj: string): Promise<{ success: boolean; deleted: number; error?: string }> {
   try {
-    const client = getStorageClient();
-    const bucket = getBucket();
     const cleanCnpj = sanitizeCnpj(cnpj);
 
-    const listCommand = new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: `${cleanCnpj}/`,
-    });
+    const r2Objects = await listFilesFromR2(`${cleanCnpj}/`);
+    const contaboObjects = shouldFallbackToContabo()
+      ? await listFilesFromContabo(`${cleanCnpj}/`)
+      : [];
 
-    const listResponse = await client.send(listCommand);
-    const objects = listResponse.Contents || [];
+    const deleteFrom = async (client: S3Client, bucket: string, objects: StorageFile[]) => {
+      const objectsToDelete = objects.map((obj) => ({ Key: obj.key }));
+      if (objectsToDelete.length === 0) return 0;
+      const deleteCommand = new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: objectsToDelete,
+          Quiet: true,
+        },
+      });
+      await client.send(deleteCommand);
+      return objectsToDelete.length;
+    };
 
-    if (objects.length === 0) {
-      return { success: true, deleted: 0 };
+    const r2Client = getR2Client();
+    const r2Bucket = getR2Bucket();
+    const deletedR2 = await deleteFrom(r2Client, r2Bucket, r2Objects);
+
+    let deletedContabo = 0;
+    if (contaboObjects.length > 0) {
+      const contaboClient = getStorageClient();
+      const contaboBucket = getBucket();
+      deletedContabo = await deleteFrom(contaboClient, contaboBucket, contaboObjects);
     }
 
-    const objectsToDelete = objects
-      .filter(obj => obj.Key)
-      .map(obj => ({ Key: obj.Key! }));
-
-    if (objectsToDelete.length === 0) {
-      return { success: true, deleted: 0 };
-    }
-
-    const deleteCommand = new DeleteObjectsCommand({
-      Bucket: bucket,
-      Delete: {
-        Objects: objectsToDelete,
-        Quiet: true,
-      },
-    });
-
-    await client.send(deleteCommand);
-
-    return { success: true, deleted: objects.length };
+    return { success: true, deleted: deletedR2 + deletedContabo };
   } catch (error) {
     console.error('Erro ao deletar arquivos da empresa:', error);
     return {
@@ -283,18 +371,16 @@ export async function deleteAllByCompany(cnpj: string): Promise<{ success: boole
   }
 }
 
-export async function getFile(key: string): Promise<Buffer | null> {
+export async function getFileFromR2(key: string): Promise<Buffer | null> {
   try {
-    const client = getStorageClient();
-    const bucket = getBucket();
-
+    const client = getR2Client();
+    const bucket = getR2Bucket();
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
     });
 
     const response = await client.send(command);
-    
     if (response.Body) {
       const chunks: Uint8Array[] = [];
       for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
@@ -302,12 +388,42 @@ export async function getFile(key: string): Promise<Buffer | null> {
       }
       return Buffer.concat(chunks);
     }
-    
     return null;
   } catch (error) {
-    console.error('Erro ao buscar arquivo:', error);
+    console.warn('Erro ao buscar arquivo no R2:', error);
     return null;
   }
+}
+
+export async function getFileFromContabo(key: string): Promise<Buffer | null> {
+  try {
+    const client = getStorageClient();
+    const bucket = getBucket();
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    });
+
+    const response = await client.send(command);
+    if (response.Body) {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks);
+    }
+    return null;
+  } catch (error) {
+    console.warn('Erro ao buscar arquivo no Contabo:', error);
+    return null;
+  }
+}
+
+export async function getFile(key: string): Promise<Buffer | null> {
+  const r2Buffer = await getFileFromR2(key);
+  if (r2Buffer) return r2Buffer;
+  if (!shouldFallbackToContabo()) return null;
+  return getFileFromContabo(key);
 }
 
 export async function getXml(cnpj: string, chaveAcesso: string): Promise<string | null> {
@@ -324,19 +440,29 @@ export async function getXml(cnpj: string, chaveAcesso: string): Promise<string 
 
 export async function getSignedDownloadUrl(key: string, expiresIn: number = 3600): Promise<string | null> {
   try {
-    const client = getStorageClient();
-    const bucket = getBucket();
-
+    const client = getR2Client();
+    const bucket = getR2Bucket();
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
     });
-
     const url = await getSignedUrl(client, command, { expiresIn });
     return url;
   } catch (error) {
-    console.error('Erro ao gerar URL assinada:', error);
-    return null;
+    console.warn('Erro ao gerar URL assinada no R2:', error);
+    if (!shouldFallbackToContabo()) return null;
+    try {
+      const client = getStorageClient();
+      const bucket = getBucket();
+      const command = new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      });
+      return await getSignedUrl(client, command, { expiresIn });
+    } catch (fallbackError) {
+      console.error('Erro ao gerar URL assinada no Contabo:', fallbackError);
+      return null;
+    }
   }
 }
 
@@ -345,31 +471,40 @@ export async function getXmlUrl(cnpj: string, chaveAcesso: string): Promise<stri
   const cleanChave = chaveAcesso.replace(/[^\d]/g, '');
   const key = `${cleanCnpj}/xml/${cleanChave}.xml`;
   
-  const bucket = getBucket();
-  const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+  const bucket = getR2Bucket();
+  const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
   
   return `${endpoint}/${bucket}/${key}`;
 }
 
 export function getKeyFromPublicUrl(url: string): string | null {
   try {
-    const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
-    const bucket = getBucket();
-
-    if (!endpoint) {
-      return null;
-    }
+    const contaboEndpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+    const r2Endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
+    const contaboBucket = process.env.CONTABO_STORAGE_BUCKET;
+    const r2Bucket = process.env.R2_BUCKET;
 
     let normalized = url;
-    if (normalized.startsWith(endpoint)) {
-      normalized = normalized.slice(endpoint.length);
+    if (r2Endpoint && normalized.startsWith(r2Endpoint)) {
+      normalized = normalized.slice(r2Endpoint.length);
+    } else if (contaboEndpoint && normalized.startsWith(contaboEndpoint)) {
+      normalized = normalized.slice(contaboEndpoint.length);
     }
 
     normalized = normalized.replace(/^\/+/, "");
-    if (normalized.startsWith(`${bucket}/`)) {
-      return normalized.slice(bucket.length + 1);
+    if (r2Bucket && normalized.startsWith(`${r2Bucket}/`)) {
+      return normalized.slice(r2Bucket.length + 1);
+    }
+    if (contaboBucket && normalized.startsWith(`${contaboBucket}/`)) {
+      return normalized.slice(contaboBucket.length + 1);
     }
 
+    // fallback: parse URL path and remove bucket segment
+    const urlObj = new URL(url);
+    const pathParts = urlObj.pathname.split('/').filter((p) => p);
+    if (pathParts.length >= 2) {
+      return pathParts.slice(1).join('/');
+    }
     return null;
   } catch (error) {
     console.error("Erro ao extrair key do URL:", error);
@@ -379,22 +514,38 @@ export function getKeyFromPublicUrl(url: string): string | null {
 
 export async function testStorageConnection(): Promise<{ success: boolean; error?: string; details?: any }> {
   try {
-    const client = getStorageClient();
-    const bucket = getBucket();
+    const r2Client = getR2Client();
+    const r2Bucket = getR2Bucket();
+    await r2Client.send(
+      new HeadBucketCommand({
+        Bucket: r2Bucket,
+      })
+    );
 
-    const command = new HeadBucketCommand({
-      Bucket: bucket,
-    });
+    let contaboOk = false;
+    try {
+      const contaboClient = getStorageClient();
+      const contaboBucket = getBucket();
+      await contaboClient.send(
+        new HeadBucketCommand({
+          Bucket: contaboBucket,
+        })
+      );
+      contaboOk = true;
+    } catch {
+      contaboOk = false;
+    }
 
-    await client.send(command);
-    
-    return { 
+    return {
       success: true,
       details: {
-        bucket,
-        endpoint: process.env.CONTABO_STORAGE_ENDPOINT,
-        region: process.env.CONTABO_STORAGE_REGION,
-      }
+        r2Bucket,
+        r2Endpoint: process.env.R2_ENDPOINT,
+        r2Region: process.env.R2_REGION,
+        contaboAvailable: contaboOk,
+        contaboBucket: process.env.CONTABO_STORAGE_BUCKET,
+        contaboEndpoint: process.env.CONTABO_STORAGE_ENDPOINT,
+      },
     };
   } catch (error) {
     console.error('Erro ao testar conexão com storage:', error);
@@ -405,31 +556,64 @@ export async function testStorageConnection(): Promise<{ success: boolean; error
   }
 }
 
-export async function listFiles(prefix: string): Promise<StorageFile[]> {
-  try {
-    const client = getStorageClient();
-    const bucket = getBucket();
-    const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+async function listFilesFromClient(
+  client: S3Client,
+  bucket: string,
+  endpoint: string,
+  prefix: string
+): Promise<StorageFile[]> {
+  const files: StorageFile[] = [];
+  let continuationToken: string | undefined;
 
+  do {
     const command = new ListObjectsV2Command({
       Bucket: bucket,
       Prefix: prefix,
+      ContinuationToken: continuationToken,
     });
-
     const response = await client.send(command);
-    
-    return (response.Contents || [])
-      .filter(obj => obj.Key && obj.Size !== undefined)
-      .map(obj => ({
-        key: obj.Key!,
-        size: obj.Size!,
-        lastModified: obj.LastModified || new Date(),
-        url: `${endpoint}/${bucket}/${obj.Key}`,
-      }));
+    (response.Contents || [])
+      .filter((obj) => obj.Key && obj.Size !== undefined)
+      .forEach((obj) => {
+        files.push({
+          key: obj.Key!,
+          size: obj.Size!,
+          lastModified: obj.LastModified || new Date(),
+          url: `${endpoint}/${bucket}/${obj.Key}`,
+        });
+      });
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return files;
+}
+
+export async function listFilesFromR2(prefix: string): Promise<StorageFile[]> {
+  try {
+    const client = getR2Client();
+    const bucket = getR2Bucket();
+    const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT || "";
+    return await listFilesFromClient(client, bucket, endpoint, prefix);
   } catch (error) {
-    console.error('Erro ao listar arquivos:', error);
+    console.error('Erro ao listar arquivos no R2:', error);
     return [];
   }
+}
+
+export async function listFilesFromContabo(prefix: string): Promise<StorageFile[]> {
+  try {
+    const client = getStorageClient();
+    const bucket = getBucket();
+    const endpoint = process.env.CONTABO_STORAGE_ENDPOINT || "";
+    return await listFilesFromClient(client, bucket, endpoint, prefix);
+  } catch (error) {
+    console.error('Erro ao listar arquivos no Contabo:', error);
+    return [];
+  }
+}
+
+export async function listFiles(prefix: string): Promise<StorageFile[]> {
+  return listFilesFromR2(prefix);
 }
 
 export async function listXmlsByCompany(cnpj: string): Promise<StorageFile[]> {
@@ -444,17 +628,43 @@ export async function listAllByCompany(cnpj: string): Promise<StorageFile[]> {
 
 export async function fileExists(key: string): Promise<boolean> {
   try {
+    const existsR2 = await fileExistsInR2(key);
+    if (existsR2) return true;
+    if (!shouldFallbackToContabo()) return false;
+    return await fileExistsInContabo(key);
+  } catch {
+    return false;
+  }
+}
+
+export async function fileExistsInR2(key: string): Promise<boolean> {
+  try {
+    const r2Client = getR2Client();
+    const r2Bucket = getR2Bucket();
+    await r2Client.send(
+      new HeadObjectCommand({
+        Bucket: r2Bucket,
+        Key: key,
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function fileExistsInContabo(key: string): Promise<boolean> {
+  try {
     const client = getStorageClient();
     const bucket = getBucket();
-
-    const command = new HeadObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    });
-
-    await client.send(command);
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
+    );
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -524,8 +734,8 @@ export function getImageUrl(
   extension: string = 'jpg'
 ): string {
   const cleanCnpj = sanitizeCnpj(cnpj);
-  const bucket = getBucket();
-  const endpoint = process.env.CONTABO_STORAGE_ENDPOINT;
+  const bucket = getR2Bucket();
+  const endpoint = process.env.R2_PUBLIC_ENDPOINT || process.env.R2_ENDPOINT;
   const key = `${cleanCnpj}/${type}/${entityId}.${extension}`;
 
   return `${endpoint}/${bucket}/${key}`;
@@ -539,21 +749,30 @@ export default {
   deleteXml,
   deleteAllByCompany,
   getFile,
+  getFileFromR2,
+  getFileFromContabo,
   getXml,
   getSignedDownloadUrl,
   getXmlUrl,
   getKeyFromPublicUrl,
   testStorageConnection,
   listFiles,
+  listFilesFromR2,
+  listFilesFromContabo,
   listXmlsByCompany,
   listAllByCompany,
   fileExists,
+  fileExistsInR2,
+  fileExistsInContabo,
   xmlExists,
   getXmlKey,
+  getR2PublicUrl,
   uploadImage,
   deleteImage,
   getImageUrl,
   sanitizeCnpj,
   extractChaveAcessoFromXml,
   extractCnpjEmitenteFromXml,
+  deleteFileFromR2,
+  deleteFileFromContabo,
 };

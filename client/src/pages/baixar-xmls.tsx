@@ -251,6 +251,43 @@ export default function BaixarXmls() {
     }
   };
 
+  const handleDownload = async (item: DownloadHistoryItem, url: string) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    const shouldDelete = window.confirm(
+      "Download iniciado. Deseja remover os arquivos do storage para economizar espaço?"
+    );
+    if (!shouldDelete) return;
+
+    try {
+      const res = await fetch(`/api/xml-downloads/${item.id}/delete-files`, {
+        method: "POST",
+        headers: getAuthHeader(),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.error || "Erro ao deletar arquivos");
+      }
+      await loadHistory();
+      toast({
+        title: "Arquivos removidos",
+        description: "ZIPs removidos do storage.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Erro",
+        description: error.message || "Erro ao deletar arquivos",
+        variant: "destructive",
+      });
+    }
+  };
+
   if (!selectedCompany) {
     return (
       <DashboardLayout>
@@ -403,25 +440,34 @@ export default function BaixarXmls() {
                         <TableCell>
                           <div className="flex items-center gap-2">
                             {item.zipNfePath && (
-                              <Button asChild variant="ghost" size="sm">
-                                <a href={item.zipNfePath} target="_blank" rel="noreferrer">
-                                  NFe
-                                </a>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDownload(item, item.zipNfePath!)}
+                              >
+                                NFe
                               </Button>
                             )}
                             {item.zipNfcePath && (
-                              <Button asChild variant="ghost" size="sm">
-                                <a href={item.zipNfcePath} target="_blank" rel="noreferrer">
-                                  NFCe
-                                </a>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDownload(item, item.zipNfcePath!)}
+                              >
+                                NFCe
                               </Button>
                             )}
                             {item.zipEventsPath && (
-                              <Button asChild variant="ghost" size="sm">
-                                <a href={item.zipEventsPath} target="_blank" rel="noreferrer">
-                                  Eventos
-                                </a>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDownload(item, item.zipEventsPath!)}
+                              >
+                                Eventos
                               </Button>
+                            )}
+                            {!item.zipNfePath && !item.zipNfcePath && !item.zipEventsPath && (
+                              <span className="text-xs text-muted-foreground">Removido</span>
                             )}
                           </div>
                         </TableCell>

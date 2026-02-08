@@ -32,6 +32,7 @@ import ReenviarAtivacao from "@/pages/reenviar-ativacao";
 import AuditoriaAcessos from "@/pages/auditoria-acessos";
 import Perfil from "@/pages/perfil";
 import ContaboStorage from "@/pages/contabo-storage";
+import R2MigrationPage from "@/pages/R2MigrationPage";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -65,6 +66,7 @@ function Router() {
       <Route path="/auditoria/acessos" component={AuditoriaAcessos} />
       <Route path="/perfil" component={Perfil} />
       <Route path="/contabo-storage" component={ContaboStorage} />
+      <Route path="/r2-migration" component={R2MigrationPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -308,6 +308,24 @@ export const xmlDownloadHistory = pgTable("xml_download_history", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// R2 Migration Runs - Execuções de migração Contabo -> R2
+export const r2MigrationRuns = pgTable("r2_migration_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  status: text("status").notNull().default("processing"), // processing, success, failed
+  dryRun: boolean("dry_run").default(false).notNull(),
+  deleteFromContabo: boolean("delete_from_contabo").default(false).notNull(),
+  batchSize: integer("batch_size").default(200).notNull(),
+  prefix: text("prefix"),
+  totalProcessed: integer("total_processed").default(0).notNull(),
+  migrated: integer("migrated").default(0).notNull(),
+  skipped: integer("skipped").default(0).notNull(),
+  failed: integer("failed").default(0).notNull(),
+  lastKey: text("last_key"),
+  lastMessage: text("last_message"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+});
+
 // Email Check Logs table - Histórico de tentativas de leitura de email (IMAP)
 export const emailCheckLogs = pgTable("email_check_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -462,6 +480,8 @@ export const xmlDownloadHistoryRelations = relations(xmlDownloadHistory, ({ one 
   }),
 }));
 
+export const r2MigrationRunsRelations = relations(r2MigrationRuns, () => ({}));
+
 export const emailCheckLogsRelations = relations(emailCheckLogs, ({ one }) => ({
   emailMonitor: one(emailMonitors, {
     fields: [emailCheckLogs.emailMonitorId],
@@ -561,6 +581,11 @@ export const insertXmlDownloadHistorySchema = createInsertSchema(xmlDownloadHist
   updatedAt: true,
 });
 
+export const insertR2MigrationRunSchema = createInsertSchema(r2MigrationRuns).omit({
+  id: true,
+  finishedAt: true,
+});
+
 export const insertEmailCheckLogSchema = createInsertSchema(emailCheckLogs).omit({
   id: true,
   createdAt: true,
@@ -615,8 +640,10 @@ export type InsertUserAccessLog = z.infer<typeof insertUserAccessLogSchema>;
 
 export type XmlEmailHistory = typeof xmlEmailHistory.$inferSelect;
 export type XmlDownloadHistory = typeof xmlDownloadHistory.$inferSelect;
+export type R2MigrationRun = typeof r2MigrationRuns.$inferSelect;
 export type InsertXmlEmailHistory = z.infer<typeof insertXmlEmailHistorySchema>;
 export type InsertXmlDownloadHistory = z.infer<typeof insertXmlDownloadHistorySchema>;
+export type InsertR2MigrationRun = z.infer<typeof insertR2MigrationRunSchema>;
 
 export type EmailCheckLog = typeof emailCheckLogs.$inferSelect;
 export type InsertEmailCheckLog = z.infer<typeof insertEmailCheckLogSchema>;

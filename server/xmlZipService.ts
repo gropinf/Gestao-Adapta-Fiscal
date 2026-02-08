@@ -2,7 +2,7 @@ import archiver from "archiver";
 import * as fs from "fs/promises";
 import { createWriteStream } from "fs";
 import * as path from "path";
-import { isContaboUrl, readXmlBuffer } from "./xmlReaderService";
+import { isStorageUrl, readXmlBuffer } from "./xmlReaderService";
 
 type ZipEntry = {
   name: string;
@@ -42,7 +42,7 @@ export async function buildZipEntries(
 
   for (const [index, filepath] of filepaths.entries()) {
     await options.onProgress?.({ index: index + 1, total, filepath, status: "start" });
-    if (isContaboUrl(filepath)) {
+    if (isStorageUrl(filepath)) {
       try {
         const buffer = await withTimeout(readXmlBuffer(filepath), perFileTimeoutMs);
         if (!buffer) {
