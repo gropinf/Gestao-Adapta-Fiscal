@@ -1,10 +1,8 @@
-import archiver from "archiver";
 import * as fs from "fs/promises";
-import { createWriteStream } from "fs";
 import * as path from "path";
 import { sendEmailWithFallback } from "./emailService";
 import { storage } from "./storage";
-import { isContaboUrl, readXmlBuffer } from "./xmlReaderService";
+import { buildZipEntries, createZipFile } from "./xmlZipService";
 import type { Company } from "../shared/schema";
 
 /**
@@ -16,6 +14,8 @@ export interface XmlEmailResult {
   xmlCount: number;
   emailSubject: string;
   error?: string;
+  errorDetails?: string;
+  errorStack?: string;
 }
 
 /**
@@ -77,76 +77,6 @@ function generateZipFilenameWithSuffix(
 ): string {
   const base = generateZipFilename(company, periodStart, periodEnd).replace(".zip", "");
   return `${base}_${suffix}.zip`;
-}
-
-/**
- * Cria arquivo ZIP com os XMLs
- */
-type ZipEntry = {
-  name: string;
-  path?: string;
-  buffer?: Buffer;
-};
-
-async function buildZipEntries(filepaths: string[]): Promise<ZipEntry[]> {
-  const entries: ZipEntry[] = [];
-
-  for (const filepath of filepaths) {
-    if (isContaboUrl(filepath)) {
-      const buffer = await readXmlBuffer(filepath);
-      if (!buffer) {
-        console.warn(`Arquivo XML não encontrado no Contabo: ${filepath}`);
-        continue;
-      }
-      const name = path.basename(new URL(filepath).pathname);
-      entries.push({ name, buffer });
-      continue;
-    }
-
-    const resolved = path.resolve(filepath);
-    try {
-      await fs.access(resolved);
-      entries.push({ name: path.basename(resolved), path: resolved });
-    } catch {
-      console.warn(`Arquivo XML não encontrado: ${resolved}`);
-    }
-  }
-
-  return entries;
-}
-
-async function createZipFile(
-  entries: ZipEntry[],
-  outputPath: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const output = createWriteStream(outputPath);
-    const archive = archiver("zip", {
-      zlib: { level: 9 } // Máxima compressão
-    });
-
-    output.on("close", () => {
-      console.log(`ZIP criado: ${archive.pointer()} bytes`);
-      resolve();
-    });
-
-    archive.on("error", (err: Error) => {
-      reject(err);
-    });
-
-    archive.pipe(output);
-
-    // Adiciona cada arquivo ao ZIP
-    for (const entry of entries) {
-      if (entry.buffer) {
-        archive.append(entry.buffer, { name: entry.name });
-      } else if (entry.path) {
-        archive.file(entry.path, { name: entry.name });
-      }
-    }
-
-    archive.finalize();
-  });
 }
 
 /**
@@ -370,17 +300,25 @@ export async function sendXmlsByEmail(
   periodEnd: string,
   destinationEmail: string
 ): Promise<XmlEmailResult> {
+  let stage = "init";
+  const setStage = (value: string) => {
+    stage = value;
+    console.log(`[XML Email] Etapa: ${value}`);
+  };
   try {
     // 1. Busca a empresa
+    setStage("load_company");
     const company = await storage.getCompanyById(companyId);
     if (!company) {
       throw new Error("Empresa não encontrada");
     }
 
     // 2. Busca XMLs do período
+    setStage("load_xmls");
     const xmls = await storage.getXmlsByPeriod(companyId, periodStart, periodEnd);
 
     // 3. Busca eventos (filtrando por regras de período/numeração)
+    setStage("load_events");
     const allEvents = await storage.getXmlEventsByCompany(companyId);
     const isWithinPeriod = (dateStr?: string | null) =>
       !!dateStr && dateStr >= periodStart && dateStr <= periodEnd;
@@ -427,6 +365,7 @@ export async function sendXmlsByEmail(
     }
 
     // 4. Prepara lista de paths para XMLs e eventos
+    setStage("prepare_paths");
     const xmlPaths = xmls.map((xml) => xml.filepath);
 
     // 5. Adiciona arquivos de eventos
@@ -437,6 +376,7 @@ export async function sendXmlsByEmail(
     }
 
     // 4. Gera nomes dos arquivos ZIP
+    setStage("prepare_zip_names");
     const xmlZipFilename = generateZipFilenameWithSuffix(company, periodStart, periodEnd, "notas");
     const xmlZipPath = path.join("/tmp", xmlZipFilename);
     const eventZipFilename = eventPaths.length > 0
@@ -445,6 +385,7 @@ export async function sendXmlsByEmail(
     const eventZipPath = eventZipFilename ? path.join("/tmp", eventZipFilename) : null;
 
     // 5. Cria arquivos ZIP
+    setStage("build_zip_entries");
     const xmlEntries = await buildZipEntries(xmlPaths);
     const eventEntries = await buildZipEntries(eventPaths);
 
@@ -457,15 +398,18 @@ export async function sendXmlsByEmail(
     }
 
     if (xmlEntries.length > 0) {
+      setStage("create_zip_xmls");
       await createZipFile(xmlEntries, xmlZipPath);
       console.log(`[XML Email] ZIP de notas criado: ${xmlZipFilename}`);
     }
     if (eventZipPath && eventEntries.length > 0) {
+      setStage("create_zip_events");
       await createZipFile(eventEntries, eventZipPath);
       console.log(`[XML Email] ZIP de eventos criado: ${eventZipFilename}`);
     }
 
     // 6. Gera assunto e corpo do email
+    setStage("prepare_email");
     const emailSubject = `${formatCnpj(company.cnpj)} - ${company.razaoSocial}`;
     const emailBody = generateEmailTemplate(
       company,
@@ -494,6 +438,7 @@ export async function sendXmlsByEmail(
       });
     }
 
+    setStage("send_email");
     const globalEmailSettings = await storage.getEmailGlobalSettings();
     const sendResult = await sendEmailWithFallback(company, {
       to: destinationEmail,
@@ -526,12 +471,19 @@ export async function sendXmlsByEmail(
     };
   } catch (error: any) {
     console.error("Erro ao enviar XMLs por email:", error);
+    const message = error?.message || "Erro desconhecido ao enviar email";
+    const errorDetails = JSON.stringify({
+      stage,
+      message,
+    });
     return {
       success: false,
       zipFilename: "",
       xmlCount: 0,
       emailSubject: "",
-      error: error.message || "Erro desconhecido ao enviar email",
+      error: message,
+      errorDetails,
+      errorStack: error?.stack,
     };
   }
 }

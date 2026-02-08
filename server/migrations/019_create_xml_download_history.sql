@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS xml_download_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  include_nfe BOOLEAN NOT NULL DEFAULT true,
+  include_nfce BOOLEAN NOT NULL DEFAULT true,
+  include_events BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'processing',
+  error_message TEXT,
+  error_details TEXT,
+  error_stack TEXT,
+  zip_nfe_path TEXT,
+  zip_nfce_path TEXT,
+  zip_events_path TEXT,
+  nfe_count INTEGER NOT NULL DEFAULT 0,
+  nfce_count INTEGER NOT NULL DEFAULT 0,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

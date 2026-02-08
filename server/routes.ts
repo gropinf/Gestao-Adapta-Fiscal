@@ -18,6 +18,7 @@ import { gerarDanfe, danfeExists, getDanfePath } from "./danfeService";
 import { testImapConnection } from "./emailTestService";
 import { checkEmailMonitor, checkAllActiveMonitors } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
+import { buildZipEntries, createZipFile } from "./xmlZipService";
 import * as contaboStorage from "./contaboStorage";
 import { apiKeyAuthMiddleware, generateApiKey } from "./middleware/apiKeyAuth";
 import {
@@ -5783,7 +5784,38 @@ ${company.razaoSocial}
       }
 
       const history = await storage.getXmlEmailHistoryByCompany(companyId);
-      res.json(history);
+
+      // Timeout automático para registros que ficaram em processamento
+      const now = Date.now();
+      const timeoutMs = 2 * 60 * 60 * 1000; // 2 horas
+      const processingStale = history.filter(
+        (item) =>
+          item.status === "processing" &&
+          item.createdAt &&
+          now - new Date(item.createdAt).getTime() > timeoutMs
+      );
+
+      if (processingStale.length > 0) {
+        await Promise.all(
+          processingStale.map((item) =>
+            storage.updateXmlEmailHistory(item.id, {
+              status: "failed",
+              errorMessage: "Timeout de processamento",
+              errorDetails: JSON.stringify({
+                stage: "timeout",
+                message: "Processamento excedeu 2 horas",
+              }),
+            })
+          )
+        );
+      }
+
+      const refreshed =
+        processingStale.length > 0
+          ? await storage.getXmlEmailHistoryByCompany(companyId)
+          : history;
+
+      res.json(refreshed);
     } catch (error: any) {
       console.error("Erro ao buscar histórico de envios:", error);
       res.status(500).json({ error: "Erro ao buscar histórico de envios" });
@@ -5860,6 +5892,8 @@ ${company.razaoSocial}
             await storage.updateXmlEmailHistory(history.id, {
               status: "failed",
               errorMessage: result.error || "Erro desconhecido",
+              errorDetails: result.errorDetails || null,
+              errorStack: result.errorStack || null,
             });
             return;
           }
@@ -5870,6 +5904,8 @@ ${company.razaoSocial}
             zipFilename: result.zipFilename,
             emailSubject: result.emailSubject,
             errorMessage: null,
+            errorDetails: null,
+            errorStack: null,
           });
 
           await storage.logAction({
@@ -5889,6 +5925,11 @@ ${company.razaoSocial}
           await storage.updateXmlEmailHistory(history.id, {
             status: "failed",
             errorMessage,
+            errorDetails: JSON.stringify({
+              stage: "background",
+              message: errorMessage,
+            }),
+            errorStack: backgroundError?.stack || null,
           });
         }
       });
@@ -5917,6 +5958,11 @@ ${company.razaoSocial}
             emailSubject: "",
             status: "failed",
             errorMessage,
+            errorDetails: JSON.stringify({
+              stage: "request",
+              message: errorMessage,
+            }),
+            errorStack: error?.stack || null,
           });
         } catch (historyError) {
           console.error("Erro ao registrar histórico de falha:", historyError);
@@ -5925,6 +5971,210 @@ ${company.razaoSocial}
       res.status(500).json({ 
         error: "Erro ao enviar XMLs por email",
         message: errorMessage,
+      });
+    }
+  });
+
+  // ========================================
+  // XML DOWNLOAD ROUTES - Download de XMLs por período
+  // ========================================
+
+  // GET /api/xml-downloads/history - Busca histórico de downloads de XMLs
+  app.get("/api/xml-downloads/history", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const companyId = req.query.companyId as string;
+
+      if (!companyId) {
+        return res.status(400).json({ error: "Company ID é obrigatório" });
+      }
+
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === companyId);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      const history = await storage.getXmlDownloadHistoryByCompany(companyId);
+      res.json(history);
+    } catch (error: any) {
+      console.error("Erro ao buscar histórico de downloads:", error);
+      res.status(500).json({ error: "Erro ao buscar histórico de downloads" });
+    }
+  });
+
+  // POST /api/xml-downloads/start - Inicia geração de ZIPs para download
+  app.post("/api/xml-downloads/start", authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const {
+        companyId,
+        periodStart,
+        periodEnd,
+        includeNfe = true,
+        includeNfce = true,
+        includeEvents = true,
+      } = req.body;
+
+      if (!companyId || !periodStart || !periodEnd) {
+        return res.status(400).json({
+          error: "Campos obrigatórios: companyId, periodStart, periodEnd",
+        });
+      }
+
+      if (!includeNfe && !includeNfce && !includeEvents) {
+        return res.status(400).json({ error: "Selecione ao menos um tipo para download" });
+      }
+
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(periodStart) || !dateRegex.test(periodEnd)) {
+        return res.status(400).json({
+          error: "Formato de data inválido. Use YYYY-MM-DD",
+        });
+      }
+
+      if (periodStart > periodEnd) {
+        return res.status(400).json({
+          error: "Data inicial deve ser menor ou igual à data final",
+        });
+      }
+
+      if (user.role !== "admin") {
+        const companies = await storage.getCompaniesByUser(user.id);
+        const hasAccess = companies.some((c) => c.id === companyId);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "Acesso negado à empresa" });
+        }
+      }
+
+      const history = await storage.createXmlDownloadHistory({
+        companyId,
+        userId: user.id,
+        periodStart,
+        periodEnd,
+        includeNfe: !!includeNfe,
+        includeNfce: !!includeNfce,
+        includeEvents: !!includeEvents,
+        status: "processing",
+        nfeCount: 0,
+        nfceCount: 0,
+        eventCount: 0,
+      });
+
+      setImmediate(async () => {
+        let stage = "init";
+        try {
+          const company = await storage.getCompanyById(companyId);
+          if (!company) {
+            throw new Error("Empresa não encontrada");
+          }
+
+          const formatDateFilename = (dateStr: string) => dateStr.replace(/-/g, "");
+          const sanitizeFilename = (text: string) =>
+            text
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .replace(/[^a-zA-Z0-9\s]/g, "")
+              .replace(/\s+/g, "_")
+              .toUpperCase();
+
+          const baseName = `xml_${company.cnpj}_${formatDateFilename(periodStart)}_${formatDateFilename(periodEnd)}_${sanitizeFilename(company.razaoSocial)}`;
+          const cleanCnpj = contaboStorage.sanitizeCnpj(company.cnpj);
+
+          stage = "load_xmls";
+          const xmls = await storage.getXmlsByPeriod(companyId, periodStart, periodEnd);
+          const nfeXmls = includeNfe ? xmls.filter((xml) => xml.tipoDoc === "NFe") : [];
+          const nfceXmls = includeNfce ? xmls.filter((xml) => xml.tipoDoc === "NFCe") : [];
+
+          stage = "load_events";
+          const allEvents = includeEvents ? await storage.getXmlEventsByCompany(companyId) : [];
+          const isWithinPeriod = (dateStr?: string | null) =>
+            !!dateStr && dateStr >= periodStart && dateStr <= periodEnd;
+          const matchesModel = (model?: string | null) =>
+            (model === "55" && includeNfe) ||
+            (model === "65" && includeNfce) ||
+            (!model && (includeNfe || includeNfce));
+
+          const events = includeEvents
+            ? allEvents.filter((event) => isWithinPeriod(event.dataEvento) && matchesModel(event.modelo))
+            : [];
+
+          if (nfeXmls.length === 0 && nfceXmls.length === 0 && events.length === 0) {
+            await storage.updateXmlDownloadHistory(history.id, {
+              status: "failed",
+              errorMessage: "Nenhum XML encontrado para o período informado",
+              errorDetails: JSON.stringify({ stage: "validate", message: "Nenhum arquivo encontrado" }),
+            });
+            return;
+          }
+
+          const uploadZip = async (filename: string, filepaths: string[]) => {
+            if (filepaths.length === 0) return { url: null, count: 0 };
+            stage = `zip:${filename}`;
+            const entries = await buildZipEntries(filepaths);
+            if (entries.length === 0) return { url: null, count: 0 };
+            const zipPath = path.join("/tmp", filename);
+            await createZipFile(entries, zipPath);
+            const buffer = await fs.readFile(zipPath);
+            await fs.unlink(zipPath).catch(() => {});
+            const key = `${cleanCnpj}/downloads/xmls/${filename}`;
+            const upload = await contaboStorage.uploadFile(buffer, key, "application/zip");
+            if (!upload.success || !upload.url) {
+              throw new Error(upload.error || "Erro ao salvar ZIP no storage");
+            }
+            return { url: upload.url, count: entries.length };
+          };
+
+          stage = "zip_nfe";
+          const nfeResult = includeNfe
+            ? await uploadZip(`${baseName}_NFE.zip`, nfeXmls.map((x) => x.filepath))
+            : { url: null, count: 0 };
+
+          stage = "zip_nfce";
+          const nfceResult = includeNfce
+            ? await uploadZip(`${baseName}_NFCE.zip`, nfceXmls.map((x) => x.filepath))
+            : { url: null, count: 0 };
+
+          stage = "zip_events";
+          const eventResult = includeEvents
+            ? await uploadZip(`${baseName}_EVENTOS.zip`, events.map((e) => e.filepath))
+            : { url: null, count: 0 };
+
+          await storage.updateXmlDownloadHistory(history.id, {
+            status: "success",
+            zipNfePath: nfeResult.url,
+            zipNfcePath: nfceResult.url,
+            zipEventsPath: eventResult.url,
+            nfeCount: nfeResult.count,
+            nfceCount: nfceResult.count,
+            eventCount: eventResult.count,
+            errorMessage: null,
+            errorDetails: null,
+            errorStack: null,
+          });
+        } catch (err: any) {
+          const message = err?.message || "Erro desconhecido";
+          await storage.updateXmlDownloadHistory(history.id, {
+            status: "failed",
+            errorMessage: message,
+            errorDetails: JSON.stringify({ stage, message }),
+            errorStack: err?.stack || null,
+          });
+        }
+      });
+
+      res.json({
+        success: true,
+        message: "Download iniciado. O processamento ocorrerá em segundo plano.",
+        data: { history },
+      });
+    } catch (error: any) {
+      console.error("Erro ao iniciar download:", error);
+      res.status(500).json({
+        error: "Erro ao iniciar download",
+        message: error?.message || "Erro desconhecido",
       });
     }
   });

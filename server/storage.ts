@@ -14,6 +14,7 @@ import {
   accessRequests,
   userAccessLogs,
   xmlEmailHistory,
+  xmlDownloadHistory,
   emailCheckLogs,
   emailMonitorSeenUids,
   apiKeys,
@@ -28,6 +29,8 @@ import {
   type InsertXml,
   type XmlEvent,
   type InsertXmlEvent,
+  type XmlDownloadHistory,
+  type InsertXmlDownloadHistory,
   type Action,
   type InsertAction,
   type Alert,
@@ -205,6 +208,11 @@ export interface IStorage {
   createXmlEmailHistory(history: InsertXmlEmailHistory): Promise<XmlEmailHistory>;
   updateXmlEmailHistory(id: string, data: Partial<InsertXmlEmailHistory>): Promise<XmlEmailHistory | undefined>;
   getXmlEmailHistoryByCompany(companyId: string): Promise<any[]>;
+
+  // XML Download History
+  createXmlDownloadHistory(history: InsertXmlDownloadHistory): Promise<XmlDownloadHistory>;
+  updateXmlDownloadHistory(id: string, data: Partial<InsertXmlDownloadHistory>): Promise<XmlDownloadHistory | undefined>;
+  getXmlDownloadHistoryByCompany(companyId: string): Promise<any[]>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1082,7 +1090,7 @@ export class DatabaseStorage implements IStorage {
   ): Promise<XmlEmailHistory | undefined> {
     const [updated] = await db
       .update(xmlEmailHistory)
-      .set(data)
+      .set({ ...data, updatedAt: new Date() })
       .where(eq(xmlEmailHistory.id, id))
       .returning();
     return updated || undefined;
@@ -1102,7 +1110,10 @@ export class DatabaseStorage implements IStorage {
         emailSubject: xmlEmailHistory.emailSubject,
         status: xmlEmailHistory.status,
         errorMessage: xmlEmailHistory.errorMessage,
+        errorDetails: xmlEmailHistory.errorDetails,
+        errorStack: xmlEmailHistory.errorStack,
         createdAt: xmlEmailHistory.createdAt,
+        updatedAt: xmlEmailHistory.updatedAt,
         userName: users.name,
         userEmail: users.email,
       })
@@ -1111,6 +1122,58 @@ export class DatabaseStorage implements IStorage {
       .where(eq(xmlEmailHistory.companyId, companyId))
       .orderBy(desc(xmlEmailHistory.createdAt));
     
+    return results;
+  }
+
+  // XML Download History methods
+  async createXmlDownloadHistory(history: InsertXmlDownloadHistory): Promise<XmlDownloadHistory> {
+    const [created] = await db.insert(xmlDownloadHistory).values(history).returning();
+    return created;
+  }
+
+  async updateXmlDownloadHistory(
+    id: string,
+    data: Partial<InsertXmlDownloadHistory>
+  ): Promise<XmlDownloadHistory | undefined> {
+    const [updated] = await db
+      .update(xmlDownloadHistory)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(xmlDownloadHistory.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async getXmlDownloadHistoryByCompany(companyId: string): Promise<any[]> {
+    const results = await db
+      .select({
+        id: xmlDownloadHistory.id,
+        companyId: xmlDownloadHistory.companyId,
+        userId: xmlDownloadHistory.userId,
+        periodStart: xmlDownloadHistory.periodStart,
+        periodEnd: xmlDownloadHistory.periodEnd,
+        includeNfe: xmlDownloadHistory.includeNfe,
+        includeNfce: xmlDownloadHistory.includeNfce,
+        includeEvents: xmlDownloadHistory.includeEvents,
+        status: xmlDownloadHistory.status,
+        errorMessage: xmlDownloadHistory.errorMessage,
+        errorDetails: xmlDownloadHistory.errorDetails,
+        errorStack: xmlDownloadHistory.errorStack,
+        zipNfePath: xmlDownloadHistory.zipNfePath,
+        zipNfcePath: xmlDownloadHistory.zipNfcePath,
+        zipEventsPath: xmlDownloadHistory.zipEventsPath,
+        nfeCount: xmlDownloadHistory.nfeCount,
+        nfceCount: xmlDownloadHistory.nfceCount,
+        eventCount: xmlDownloadHistory.eventCount,
+        createdAt: xmlDownloadHistory.createdAt,
+        updatedAt: xmlDownloadHistory.updatedAt,
+        userName: users.name,
+        userEmail: users.email,
+      })
+      .from(xmlDownloadHistory)
+      .leftJoin(users, eq(xmlDownloadHistory.userId, users.id))
+      .where(eq(xmlDownloadHistory.companyId, companyId))
+      .orderBy(desc(xmlDownloadHistory.createdAt));
+
     return results;
   }
 

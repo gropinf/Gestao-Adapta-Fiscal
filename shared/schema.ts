@@ -272,7 +272,34 @@ export const xmlEmailHistory = pgTable("xml_email_history", {
   emailSubject: text("email_subject").notNull(), // Assunto do email
   status: text("status").notNull().default("success"), // success, failed
   errorMessage: text("error_message"), // Mensagem de erro (se houver)
+  errorDetails: text("error_details"),
+  errorStack: text("error_stack"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// XML Download History table - Histórico de downloads de XMLs
+export const xmlDownloadHistory = pgTable("xml_download_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  periodStart: text("period_start").notNull(),
+  periodEnd: text("period_end").notNull(),
+  includeNfe: boolean("include_nfe").default(true).notNull(),
+  includeNfce: boolean("include_nfce").default(true).notNull(),
+  includeEvents: boolean("include_events").default(true).notNull(),
+  status: text("status").notNull().default("processing"), // processing, success, failed
+  errorMessage: text("error_message"),
+  errorDetails: text("error_details"),
+  errorStack: text("error_stack"),
+  zipNfePath: text("zip_nfe_path"),
+  zipNfcePath: text("zip_nfce_path"),
+  zipEventsPath: text("zip_events_path"),
+  nfeCount: integer("nfe_count").notNull().default(0),
+  nfceCount: integer("nfce_count").notNull().default(0),
+  eventCount: integer("event_count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // Email Check Logs table - Histórico de tentativas de leitura de email (IMAP)
@@ -418,6 +445,17 @@ export const xmlEmailHistoryRelations = relations(xmlEmailHistory, ({ one }) => 
   }),
 }));
 
+export const xmlDownloadHistoryRelations = relations(xmlDownloadHistory, ({ one }) => ({
+  company: one(companies, {
+    fields: [xmlDownloadHistory.companyId],
+    references: [companies.id],
+  }),
+  user: one(users, {
+    fields: [xmlDownloadHistory.userId],
+    references: [users.id],
+  }),
+}));
+
 export const emailCheckLogsRelations = relations(emailCheckLogs, ({ one }) => ({
   emailMonitor: one(emailMonitors, {
     fields: [emailCheckLogs.emailMonitorId],
@@ -508,6 +546,13 @@ export const insertUserAccessLogSchema = createInsertSchema(userAccessLogs).omit
 export const insertXmlEmailHistorySchema = createInsertSchema(xmlEmailHistory).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
+});
+
+export const insertXmlDownloadHistorySchema = createInsertSchema(xmlDownloadHistory).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertEmailCheckLogSchema = createInsertSchema(emailCheckLogs).omit({
@@ -563,7 +608,9 @@ export type UserAccessLog = typeof userAccessLogs.$inferSelect;
 export type InsertUserAccessLog = z.infer<typeof insertUserAccessLogSchema>;
 
 export type XmlEmailHistory = typeof xmlEmailHistory.$inferSelect;
+export type XmlDownloadHistory = typeof xmlDownloadHistory.$inferSelect;
 export type InsertXmlEmailHistory = z.infer<typeof insertXmlEmailHistorySchema>;
+export type InsertXmlDownloadHistory = z.infer<typeof insertXmlDownloadHistorySchema>;
 
 export type EmailCheckLog = typeof emailCheckLogs.$inferSelect;
 export type InsertEmailCheckLog = z.infer<typeof insertEmailCheckLogSchema>;

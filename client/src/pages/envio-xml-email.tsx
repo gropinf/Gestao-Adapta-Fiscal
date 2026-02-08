@@ -18,11 +18,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import type { Company } from "@shared/schema";
-import { Calendar, Mail, Package, Send, CheckCircle2, XCircle, Loader2, AlertCircle, Copy } from "lucide-react";
+import { Calendar, Mail, Package, Send, CheckCircle2, XCircle, Loader2, AlertCircle, Copy, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import DashboardLayout from "@/components/dashboard-layout";
 
@@ -36,7 +43,10 @@ interface EmailHistoryItem {
   emailSubject: string;
   status: string;
   errorMessage?: string;
+  errorDetails?: string | null;
+  errorStack?: string | null;
   createdAt: string;
+  updatedAt?: string;
   userName: string;
   userEmail: string;
 }
@@ -59,12 +69,15 @@ export default function EnvioXmlEmail() {
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [history, setHistory] = useState<EmailHistoryItem[]>([]);
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const {
     register,
     handleSubmit,
     formState: { errors },
     reset,
+    getValues,
+    setValue,
   } = useForm<FormData>();
 
   // Busca lista de empresas do usuário
@@ -106,6 +119,7 @@ export default function EnvioXmlEmail() {
   const canSendEmail = isEmailConfigured || !!globalEmailInfo?.configured;
   const remetenteEmail = selectedCompany?.emailUser || globalEmailInfo?.fromEmail || "Não configurado";
   const lastHistory = history[0];
+  const [selectedHistory, setSelectedHistory] = useState<EmailHistoryItem | null>(null);
 
   // Carrega histórico ao montar o componente ou trocar de empresa
   useEffect(() => {
@@ -113,6 +127,37 @@ export default function EnvioXmlEmail() {
       loadHistory();
     }
   }, [currentCompanyId]);
+
+  useEffect(() => {
+    const hasProcessing = history.some((item) => item.status === "processing");
+    if (!hasProcessing) return;
+
+    const interval = setInterval(() => {
+      setNowTick(Date.now());
+      loadHistory();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [history]);
+
+  useEffect(() => {
+    if (!currentCompanyId) return;
+    const { periodStart, periodEnd } = getValues();
+    if (periodStart || periodEnd) return;
+
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0);
+    const toDateInput = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+
+    setValue("periodStart", toDateInput(start));
+    setValue("periodEnd", toDateInput(end));
+  }, [currentCompanyId, getValues, setValue]);
 
   const loadHistory = async () => {
     if (!currentCompanyId) return;
@@ -223,6 +268,25 @@ export default function EnvioXmlEmail() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  };
+
+  const formatDuration = (ms: number): string => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [
+      hours > 0 ? `${hours}h` : null,
+      `${minutes}m`,
+      `${seconds}s`,
+    ].filter(Boolean);
+    return parts.join(" ");
+  };
+
+  const getProcessingElapsed = (item: EmailHistoryItem): string => {
+    if (!item.createdAt) return "";
+    const created = new Date(item.createdAt).getTime();
+    return formatDuration(nowTick - created);
   };
 
   const copyToClipboard = (text: string, label: string) => {
@@ -507,19 +571,39 @@ export default function EnvioXmlEmail() {
                     <TableHead>XMLs</TableHead>
                     <TableHead>Arquivo</TableHead>
                     <TableHead>Enviado por</TableHead>
+                    <TableHead className="text-right">Detalhes</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {history.map((item) => (
-                    <TableRow key={item.id}>
+                    <TableRow
+                      key={item.id}
+                      className={
+                        item.status === "failed" &&
+                        item.errorMessage?.toLowerCase().includes("timeout")
+                          ? "bg-yellow-50/60"
+                          : undefined
+                      }
+                    >
                       <TableCell>{getStatusBadge(item.status)}</TableCell>
                       <TableCell>
                         {item.status === "failed" ? (
-                          <span
-                            className="text-xs text-red-600 truncate max-w-[220px] block"
-                            title={item.errorMessage || "Erro não informado"}
-                          >
-                            {item.errorMessage || "Erro não informado"}
+                          <div className="space-y-1">
+                            <span
+                              className="text-xs text-red-600 truncate max-w-[220px] block"
+                              title={item.errorMessage || "Erro não informado"}
+                            >
+                              {item.errorMessage || "Erro não informado"}
+                            </span>
+                            {item.errorMessage?.toLowerCase().includes("timeout") && (
+                              <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-300 bg-yellow-50">
+                                Timeout
+                              </Badge>
+                            )}
+                          </div>
+                        ) : item.status === "processing" ? (
+                          <span className="text-xs text-muted-foreground">
+                            Processando há {getProcessingElapsed(item)}
                           </span>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
@@ -576,6 +660,19 @@ export default function EnvioXmlEmail() {
                           </div>
                         </div>
                       </TableCell>
+                      <TableCell className="text-right">
+                        {(item.errorDetails || item.errorStack) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => setSelectedHistory(item)}
+                            title="Ver detalhes"
+                          >
+                            <Info className="w-3 h-3" />
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -584,6 +681,40 @@ export default function EnvioXmlEmail() {
           )}
         </CardContent>
       </Card>
+      <Dialog open={!!selectedHistory} onOpenChange={(open) => !open && setSelectedHistory(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Detalhes do envio</DialogTitle>
+            <DialogDescription>
+              Informações técnicas do processamento do envio
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            {selectedHistory?.errorMessage && (
+              <div>
+                <div className="font-medium">Erro</div>
+                <div className="text-muted-foreground">{selectedHistory.errorMessage}</div>
+              </div>
+            )}
+            {selectedHistory?.errorDetails && (
+              <div>
+                <div className="font-medium">Detalhes</div>
+                <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+                  {selectedHistory.errorDetails}
+                </pre>
+              </div>
+            )}
+            {selectedHistory?.errorStack && (
+              <div>
+                <div className="font-medium">Stack</div>
+                <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+                  {selectedHistory.errorStack}
+                </pre>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
       </div>
     </DashboardLayout>
   );

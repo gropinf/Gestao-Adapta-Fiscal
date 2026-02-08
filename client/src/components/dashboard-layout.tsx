@@ -30,6 +30,7 @@ import {
   BarChart3,
   Mail,
   Send,
+  Download,
   Shield,
   LogOut,
   ChevronDown,
@@ -122,6 +123,11 @@ const menuItems = [
     title: "Enviar XMLs por Email",
     url: "/envio-xml-email",
     icon: Send,
+  },
+  {
+    title: "Baixar XMLs",
+    url: "/xml-downloads",
+    icon: Download,
   },
   {
     title: "Auditoria de Acessos",

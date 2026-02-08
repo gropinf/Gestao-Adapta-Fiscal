@@ -19,6 +19,7 @@ import EmailCheckLogs from "@/pages/email-check-logs";
 import EmailMonitorRuns from "@/pages/email-monitor-runs";
 import PurgeUnapprovedXmls from "@/pages/purge-unapproved-xmls";
 import EnvioXmlEmail from "@/pages/envio-xml-email";
+import BaixarXmls from "@/pages/baixar-xmls";
 import EmailGlobalPage from "@/pages/email-global";
 import ApiKeysPage from "@/pages/api-keys";
 import ActivatePage from "@/pages/activate";
@@ -58,6 +59,7 @@ function Router() {
       <Route path="/configuracoes/api-keys" component={ApiKeysPage} />
       <Route path="/configuracoes/email-logs" component={EmailCheckLogs} />
       <Route path="/configuracoes/email-monitor-runs" component={EmailMonitorRuns} />
+      <Route path="/xml-downloads" component={BaixarXmls} />
       <Route path="/configuracoes/purge-unapproved-xmls" component={PurgeUnapprovedXmls} />
       <Route path="/envio-xml-email" component={EnvioXmlEmail} />
       <Route path="/auditoria/acessos" component={AuditoriaAcessos} />
