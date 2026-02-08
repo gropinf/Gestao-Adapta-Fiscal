@@ -8,7 +8,7 @@ import { apiRequest } from "../lib/queryClient";
 
 type R2MigrationRun = {
   id: string;
-  status: "processing" | "success" | "failed";
+  status: "processing" | "success" | "failed" | "cancelled";
   dryRun: boolean;
   deleteFromContabo: boolean;
   batchSize: number;
@@ -80,6 +80,22 @@ export default function R2MigrationPage() {
     } catch (err: any) {
       setRunning(false);
       setError(err?.message || "Falha ao iniciar migração");
+    }
+  };
+
+  const cancelMigration = async () => {
+    if (!latest?.id) return;
+    setError(null);
+    if (!confirm("Deseja cancelar a migração em andamento?")) {
+      return;
+    }
+    try {
+      const res = await apiRequest("POST", "/api/r2-migration/cancel", { runId: latest.id });
+      const data = await res.json();
+      setLatest(data.run || null);
+      setRunning(false);
+    } catch (err: any) {
+      setError(err?.message || "Falha ao cancelar migração");
     }
   };
 
@@ -155,6 +171,9 @@ export default function R2MigrationPage() {
           <div className="flex items-center gap-3">
             <Button onClick={startMigration} disabled={running}>
               {running ? "Em execução..." : "Iniciar migração"}
+            </Button>
+            <Button variant="destructive" onClick={cancelMigration} disabled={!running}>
+              Cancelar
             </Button>
             {error && <div className="text-sm text-red-600">{error}</div>}
           </div>

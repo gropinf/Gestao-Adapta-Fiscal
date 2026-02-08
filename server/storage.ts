@@ -222,6 +222,7 @@ export interface IStorage {
   createR2MigrationRun(run: InsertR2MigrationRun): Promise<R2MigrationRun>;
   updateR2MigrationRun(id: string, data: Partial<InsertR2MigrationRun>): Promise<R2MigrationRun | undefined>;
   getLatestR2MigrationRun(): Promise<R2MigrationRun | undefined>;
+  getR2MigrationRunById(id: string): Promise<R2MigrationRun | undefined>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1223,6 +1224,15 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(r2MigrationRuns)
       .orderBy(desc(r2MigrationRuns.startedAt))
+      .limit(1);
+    return run || undefined;
+  }
+
+  async getR2MigrationRunById(id: string): Promise<R2MigrationRun | undefined> {
+    const [run] = await db
+      .select()
+      .from(r2MigrationRuns)
+      .where(eq(r2MigrationRuns.id, id))
       .limit(1);
     return run || undefined;
   }

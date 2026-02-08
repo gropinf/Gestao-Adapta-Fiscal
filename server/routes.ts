@@ -6358,6 +6358,35 @@ ${company.razaoSocial}
     }
   });
 
+  app.post("/api/r2-migration/cancel", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { runId } = req.body || {};
+      if (!runId) {
+        return res.status(400).json({ error: "runId é obrigatório" });
+      }
+
+      const run = await storage.getR2MigrationRunById(runId);
+      if (!run) {
+        return res.status(404).json({ error: "Execução não encontrada" });
+      }
+
+      if (run.status !== "processing") {
+        return res.json({ success: true, run });
+      }
+
+      const updated = await storage.updateR2MigrationRun(runId, {
+        status: "cancelled",
+        finishedAt: new Date(),
+        lastMessage: "Cancelado pelo usuário",
+      });
+
+      res.json({ success: true, run: updated || run });
+    } catch (error: any) {
+      console.error("Erro ao cancelar migração R2:", error);
+      res.status(500).json({ error: "Erro ao cancelar migração R2" });
+    }
+  });
+
   // POST /api/xml-downloads/:id/cancel - Marca download como cancelado/falha
   app.post("/api/xml-downloads/:id/cancel", authMiddleware, async (req: AuthRequest, res) => {
     try {

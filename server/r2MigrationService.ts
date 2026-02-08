@@ -33,6 +33,11 @@ const uploadToR2 = async (key: string, sourceBuffer: Buffer) => {
   return upload.url || contaboStorage.getR2PublicUrl(key);
 };
 
+const isRunCancelled = async (runId: string) => {
+  const run = await storage.getR2MigrationRunById(runId);
+  return run?.status === "cancelled";
+};
+
 const processFile = async (
   runId: string,
   id: string,
@@ -40,6 +45,10 @@ const processFile = async (
   table: "xmls" | "xml_events",
   options: MigrationOptions
 ) => {
+  if (await isRunCancelled(runId)) {
+    return { migrated: false, skipped: true, cancelled: true };
+  }
+
   let key: string | null = null;
   if (isUrl(filepath)) {
     key = contaboStorage.getKeyFromPublicUrl(filepath);
@@ -95,7 +104,7 @@ const processFile = async (
     lastMessage: `OK (${table})`,
   });
 
-  return { migrated: true, skipped: false };
+  return { migrated: true, skipped: false, cancelled: false };
 };
 
 const migrateTable = async (runId: string, table: "xmls" | "xml_events", options: MigrationOptions) => {
@@ -105,6 +114,10 @@ const migrateTable = async (runId: string, table: "xmls" | "xml_events", options
   let failed = 0;
 
   while (true) {
+    if (await isRunCancelled(runId)) {
+      return { migrated, skipped, failed, totalProcessed: migrated + skipped + failed };
+    }
+
     const rows =
       table === "xmls"
         ? await db
@@ -123,8 +136,15 @@ const migrateTable = async (runId: string, table: "xmls" | "xml_events", options
     if (rows.length === 0) break;
 
     for (const row of rows) {
+      if (await isRunCancelled(runId)) {
+        return { migrated, skipped, failed, totalProcessed: migrated + skipped + failed };
+      }
+
       try {
         const result = await processFile(runId, row.id, row.filepath as string, table, options);
+        if (result.cancelled) {
+          return { migrated, skipped, failed, totalProcessed: migrated + skipped + failed };
+        }
         if (result.migrated) migrated++;
         if (result.skipped) skipped++;
       } catch (error: any) {
@@ -150,7 +170,9 @@ const migrateTable = async (runId: string, table: "xmls" | "xml_events", options
 
 export const runR2Migration = async (runId: string, options: MigrationOptions) => {
   const xmlsResult = await migrateTable(runId, "xmls", options);
+  if (await isRunCancelled(runId)) return;
   const eventsResult = await migrateTable(runId, "xml_events", options);
+  if (await isRunCancelled(runId)) return;
 
   await storage.updateR2MigrationRun(runId, {
     status: "success",
