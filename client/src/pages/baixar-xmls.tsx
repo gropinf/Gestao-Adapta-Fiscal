@@ -31,6 +31,7 @@ import {
 interface FormData {
   periodStart: string;
   periodEnd: string;
+  batchSize?: number;
 }
 
 interface DownloadHistoryItem {
@@ -47,9 +48,9 @@ interface DownloadHistoryItem {
   errorMessage?: string | null;
   errorDetails?: string | null;
   errorStack?: string | null;
-  zipNfePath?: string | null;
-  zipNfcePath?: string | null;
-  zipEventsPath?: string | null;
+  zipNfePath?: string | string[] | null;
+  zipNfcePath?: string | string[] | null;
+  zipEventsPath?: string | string[] | null;
   nfeCount: number;
   nfceCount: number;
   eventCount: number;
@@ -288,6 +289,33 @@ export default function BaixarXmls() {
     }
   };
 
+  const toZipList = (value?: string | string[] | null): string[] => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    return [value];
+  };
+
+  const renderUrlList = (label: string, urls: string[]) => {
+    if (urls.length === 0) return null;
+    return (
+      <div className="space-y-1">
+        <div className="text-[10px] text-muted-foreground">{label}</div>
+        {urls.map((url, index) => (
+          <a
+            key={`${label}-${index}`}
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="block max-w-[260px] truncate text-[10px] text-blue-600 underline"
+            title={url}
+          >
+            {url}
+          </a>
+        ))}
+      </div>
+    );
+  };
+
   if (!selectedCompany) {
     return (
       <DashboardLayout>
@@ -368,6 +396,22 @@ export default function BaixarXmls() {
                 </label>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="batchSize">Arquivos por ZIP (opcional)</Label>
+                <Input
+                  id="batchSize"
+                  type="number"
+                  min={0}
+                  placeholder="Ex: 500"
+                  {...register("batchSize", {
+                    setValueAs: (value) => (value ? Number(value) : undefined),
+                  })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Quando informado, divide o download em partes menores.
+                </p>
+              </div>
+
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? (
                   <>
@@ -439,43 +483,57 @@ export default function BaixarXmls() {
                         <TableCell>{item.eventCount}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            {item.zipNfePath && (
+                            {toZipList(item.zipNfePath).map((url, index, list) => (
                               <Button
+                                key={`nfe-${index}`}
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() => handleDownload(item, item.zipNfePath!)}
+                                onClick={() => handleDownload(item, url)}
                               >
                                 <Download className="h-3 w-3" />
-                                Baixar NFe
+                                {list.length > 1 ? `Baixar NFe ${index + 1}/${list.length}` : "Baixar NFe"}
                               </Button>
-                            )}
-                            {item.zipNfcePath && (
+                            ))}
+                            {toZipList(item.zipNfcePath).map((url, index, list) => (
                               <Button
+                                key={`nfce-${index}`}
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() => handleDownload(item, item.zipNfcePath!)}
+                                onClick={() => handleDownload(item, url)}
                               >
                                 <Download className="h-3 w-3" />
-                                Baixar NFCe
+                                {list.length > 1 ? `Baixar NFCe ${index + 1}/${list.length}` : "Baixar NFCe"}
                               </Button>
-                            )}
-                            {item.zipEventsPath && (
+                            ))}
+                            {toZipList(item.zipEventsPath).map((url, index, list) => (
                               <Button
+                                key={`events-${index}`}
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() => handleDownload(item, item.zipEventsPath!)}
+                                onClick={() => handleDownload(item, url)}
                               >
                                 <Download className="h-3 w-3" />
-                                Baixar Eventos
+                                {list.length > 1 ? `Baixar Eventos ${index + 1}/${list.length}` : "Baixar Eventos"}
                               </Button>
-                            )}
-                            {!item.zipNfePath && !item.zipNfcePath && !item.zipEventsPath && (
+                            ))}
+                            {toZipList(item.zipNfePath).length === 0 &&
+                              toZipList(item.zipNfcePath).length === 0 &&
+                              toZipList(item.zipEventsPath).length === 0 && (
                               <span className="text-xs text-muted-foreground">Removido</span>
                             )}
                           </div>
+                          {(toZipList(item.zipNfePath).length > 0 ||
+                            toZipList(item.zipNfcePath).length > 0 ||
+                            toZipList(item.zipEventsPath).length > 0) && (
+                            <div className="mt-2 space-y-2">
+                              {renderUrlList("NFe", toZipList(item.zipNfePath))}
+                              {renderUrlList("NFCe", toZipList(item.zipNfcePath))}
+                              {renderUrlList("Eventos", toZipList(item.zipEventsPath))}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           {formatDateTime(item.createdAt)}
@@ -498,7 +556,11 @@ export default function BaixarXmls() {
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          {(item.errorDetails || item.errorStack) && (
+                          {(item.errorDetails ||
+                            item.errorStack ||
+                            toZipList(item.zipNfePath).length > 0 ||
+                            toZipList(item.zipNfcePath).length > 0 ||
+                            toZipList(item.zipEventsPath).length > 0) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -526,6 +588,37 @@ export default function BaixarXmls() {
               <DialogDescription>Informações técnicas do processamento</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 text-sm">
+              {(toZipList(selectedHistory?.zipNfePath).length > 0 ||
+                toZipList(selectedHistory?.zipNfcePath).length > 0 ||
+                toZipList(selectedHistory?.zipEventsPath).length > 0) && (
+                <div className="space-y-2">
+                  <div className="font-medium">URLs de download</div>
+                  {toZipList(selectedHistory?.zipNfePath).length > 0 && (
+                    <div>
+                      <div className="text-xs text-muted-foreground">NFe</div>
+                      <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+                        {toZipList(selectedHistory?.zipNfePath).join("\n")}
+                      </pre>
+                    </div>
+                  )}
+                  {toZipList(selectedHistory?.zipNfcePath).length > 0 && (
+                    <div>
+                      <div className="text-xs text-muted-foreground">NFCe</div>
+                      <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+                        {toZipList(selectedHistory?.zipNfcePath).join("\n")}
+                      </pre>
+                    </div>
+                  )}
+                  {toZipList(selectedHistory?.zipEventsPath).length > 0 && (
+                    <div>
+                      <div className="text-xs text-muted-foreground">Eventos</div>
+                      <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">
+                        {toZipList(selectedHistory?.zipEventsPath).join("\n")}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
               {selectedHistory?.errorMessage && (
                 <div>
                   <div className="font-medium">Erro</div>

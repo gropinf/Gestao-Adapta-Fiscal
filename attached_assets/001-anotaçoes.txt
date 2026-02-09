@@ -137,3 +137,14 @@ R2_ACCESS_KEY=<Access Key ID>
 R2_SECRET_KEY=<Secret Access Key>
 R2_BUCKET=<nome-do-bucket>
 R2_REGION=auto
+
+
+------------
+# Worker ZIP on-the-fly
+XML_ZIP_WORKER_ENABLED=true
+XML_ZIP_WORKER_URL=https://zip-worker.groppoinfo.workers.dev/zip
+XML_ZIP_WORKER_MIN_COUNT=3000
+
+# Cache local (Replit)
+XML_CACHE_TTL_MS=2592000000
+XML_CACHE_DIR=/tmp/xml-cache

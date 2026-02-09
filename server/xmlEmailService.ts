@@ -1,8 +1,10 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import crypto from "crypto";
 import { sendEmailWithFallback } from "./emailService";
 import { storage } from "./storage";
 import { buildZipEntries, createZipFile } from "./xmlZipService";
+import * as contaboStorage from "./contaboStorage";
 import type { Company } from "../shared/schema";
 
 /**
@@ -91,7 +93,9 @@ function generateEmailTemplate(
   inutCount: number,
   otherEventCount: number,
   xmlZipFilename: string,
-  eventZipFilename?: string | null
+  eventZipFilename?: string | null,
+  xmlZipUrl?: string | null,
+  eventZipUrl?: string | null
 ): string {
   const cnpjFormatado = formatCnpj(company.cnpj);
   const dtInicio = formatDate(periodStart);
@@ -198,7 +202,11 @@ function generateEmailTemplate(
     <div class="content">
       <p>Prezado(a),</p>
       
-      <p>Segue em anexo o arquivo compactado contendo os XMLs de Notas Fiscais Eletrônicas do período solicitado.</p>
+      <p>${
+        xmlZipUrl || eventZipUrl
+          ? "Os arquivos compactados estão disponíveis para download nos links abaixo."
+          : "Segue em anexo o arquivo compactado contendo os XMLs de Notas Fiscais Eletrônicas do período solicitado."
+      }</p>
       
       <div class="info-box">
         <h3>📊 Dados da Empresa</h3>
@@ -259,14 +267,22 @@ function generateEmailTemplate(
       </div>
       
       <div class="file-box">
-        <div class="file-icon">📦</div>
-        <div class="file-name">${xmlZipFilename}</div>
+        <div class="file-icon">${xmlZipUrl ? "⬇️" : "📦"}</div>
+        <div class="file-name">${
+          xmlZipUrl
+            ? `<a href="${xmlZipUrl}" target="_blank" rel="noreferrer">${xmlZipFilename}</a>`
+            : xmlZipFilename
+        }</div>
         <p style="margin-top: 10px; color: #6b7280;">XMLs das notas fiscais (ZIP)</p>
       </div>
       ${eventZipFilename ? `
       <div class="file-box">
-        <div class="file-icon">🗂️</div>
-        <div class="file-name">${eventZipFilename}</div>
+        <div class="file-icon">${eventZipUrl ? "⬇️" : "🗂️"}</div>
+        <div class="file-name">${
+          eventZipUrl
+            ? `<a href="${eventZipUrl}" target="_blank" rel="noreferrer">${eventZipFilename}</a>`
+            : eventZipFilename
+        }</div>
         <p style="margin-top: 10px; color: #6b7280;">Eventos fiscais (ZIP)</p>
       </div>
       ` : ''}
@@ -388,28 +404,67 @@ export async function sendXmlsByEmail(
       : null;
     const eventZipPath = eventZipFilename ? path.join("/tmp", eventZipFilename) : null;
 
-    // 5. Cria arquivos ZIP
-    setStage("build_zip_entries");
-    const xmlEntries = await buildZipEntries(xmlPaths);
-    const eventEntries = await buildZipEntries(eventPaths);
+    const workerEnabled = process.env.XML_ZIP_WORKER_ENABLED === "true";
+    const workerUrl = process.env.XML_ZIP_WORKER_URL;
+    const workerThreshold = Number(process.env.XML_ZIP_WORKER_MIN_COUNT || 0);
+    const totalCount = xmlPaths.length + eventPaths.length;
 
-    console.log(
-      `[XML Email] Arquivos prontos: ${xmlEntries.length} notas, ${eventEntries.length} eventos`
-    );
+    const createWorkerZipUrl = async (filepaths: string[], filename: string) => {
+      if (!workerEnabled || !workerUrl) return null;
+      if (workerThreshold > 0 && totalCount < workerThreshold) return null;
+      const keys = filepaths
+        .map((filepath) => contaboStorage.getKeyFromPublicUrl(filepath))
+        .filter((key): key is string => !!key);
+      if (keys.length !== filepaths.length) return null;
+      const listKey = `${contaboStorage.sanitizeCnpj(company.cnpj)}/downloads/lists/${crypto.randomUUID()}_${filename}.json`;
+      const payload = Buffer.from(JSON.stringify(keys), "utf-8");
+      const upload = await contaboStorage.uploadFile(payload, listKey, "application/json");
+      if (!upload.success) return null;
+      return `${workerUrl}?listKey=${encodeURIComponent(listKey)}&filename=${encodeURIComponent(filename)}`;
+    };
 
-    if (xmlEntries.length === 0 && eventEntries.length === 0) {
-      throw new Error("Nenhum arquivo XML válido encontrado no servidor");
+    let xmlEntries: any[] = [];
+    let eventEntries: any[] = [];
+    let xmlZipUrl: string | null = null;
+    let eventZipUrl: string | null = null;
+
+    if (workerEnabled && workerUrl) {
+      setStage("prepare_worker_links");
+      if (xmlPaths.length > 0) {
+        xmlZipUrl = await createWorkerZipUrl(xmlPaths, xmlZipFilename);
+      }
+      if (eventZipFilename && eventPaths.length > 0) {
+        eventZipUrl = await createWorkerZipUrl(eventPaths, eventZipFilename);
+      }
     }
 
-    if (xmlEntries.length > 0) {
-      setStage("create_zip_xmls");
-      await createZipFile(xmlEntries, xmlZipPath);
-      console.log(`[XML Email] ZIP de notas criado: ${xmlZipFilename}`);
-    }
-    if (eventZipPath && eventEntries.length > 0) {
-      setStage("create_zip_events");
-      await createZipFile(eventEntries, eventZipPath);
-      console.log(`[XML Email] ZIP de eventos criado: ${eventZipFilename}`);
+    const shouldFallbackToLocal =
+      (xmlPaths.length > 0 && !xmlZipUrl) ||
+      (eventZipFilename && eventPaths.length > 0 && !eventZipUrl);
+
+    if (shouldFallbackToLocal) {
+      setStage("build_zip_entries");
+      xmlEntries = await buildZipEntries(xmlPaths);
+      eventEntries = await buildZipEntries(eventPaths);
+
+      console.log(
+        `[XML Email] Arquivos prontos: ${xmlEntries.length} notas, ${eventEntries.length} eventos`
+      );
+
+      if (xmlEntries.length === 0 && eventEntries.length === 0) {
+        throw new Error("Nenhum arquivo XML válido encontrado no servidor");
+      }
+
+      if (xmlEntries.length > 0) {
+        setStage("create_zip_xmls");
+        await createZipFile(xmlEntries, xmlZipPath);
+        console.log(`[XML Email] ZIP de notas criado: ${xmlZipFilename}`);
+      }
+      if (eventZipPath && eventEntries.length > 0) {
+        setStage("create_zip_events");
+        await createZipFile(eventEntries, eventZipPath);
+        console.log(`[XML Email] ZIP de eventos criado: ${eventZipFilename}`);
+      }
     }
 
     // 6. Gera assunto e corpo do email
@@ -424,18 +479,20 @@ export async function sendXmlsByEmail(
       inutEvents.length,
       otherEvents.length,
       xmlZipFilename,
-      eventZipFilename
+      eventZipFilename,
+      xmlZipUrl,
+      eventZipUrl
     );
 
     // 7. Envia o email
     const attachments = [];
-    if (xmlEntries.length > 0) {
+    if (!xmlZipUrl && xmlEntries.length > 0) {
       attachments.push({
         filename: xmlZipFilename,
         path: xmlZipPath,
       });
     }
-    if (eventZipPath && eventZipFilename && eventEntries.length > 0) {
+    if (!eventZipUrl && eventZipPath && eventZipFilename && eventEntries.length > 0) {
       attachments.push({
         filename: eventZipFilename,
         path: eventZipPath,
@@ -457,10 +514,10 @@ export async function sendXmlsByEmail(
 
     // 8. Remove arquivos ZIP temporários
     try {
-      if (xmlEntries.length > 0) {
+      if (xmlEntries.length > 0 && !xmlZipUrl) {
         await fs.unlink(xmlZipPath);
       }
-      if (eventZipPath && eventEntries.length > 0) {
+      if (eventZipPath && eventEntries.length > 0 && !eventZipUrl) {
         await fs.unlink(eventZipPath);
       }
     } catch (err) {

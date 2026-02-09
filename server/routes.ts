@@ -18,7 +18,7 @@ import { gerarDanfe, danfeExists, getDanfePath } from "./danfeService";
 import { testImapConnection } from "./emailTestService";
 import { checkEmailMonitor, checkAllActiveMonitors } from "./emailMonitorService";
 import { sendXmlsByEmail } from "./xmlEmailService";
-import { buildZipEntries, createZipFile } from "./xmlZipService";
+import { createZipFileFromFilepaths } from "./xmlZipService";
 import * as contaboStorage from "./contaboStorage";
 import { runR2Migration } from "./r2MigrationService";
 import { apiKeyAuthMiddleware, generateApiKey } from "./middleware/apiKeyAuth";
@@ -6002,6 +6002,14 @@ ${company.razaoSocial}
   // ========================================
   // XML DOWNLOAD ROUTES - Download de XMLs por período
   // ========================================
+  const chunkArray = <T,>(items: T[], size: number): T[][] => {
+    if (size <= 0) return [items];
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+      chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+  };
 
   // GET /api/xml-downloads/history - Busca histórico de downloads de XMLs
   app.get("/api/xml-downloads/history", authMiddleware, async (req: AuthRequest, res) => {
@@ -6023,20 +6031,49 @@ ${company.razaoSocial}
 
       const history = await storage.getXmlDownloadHistoryByCompany(companyId);
 
+      const parseZipValue = (value?: string | null): string | string[] | null => {
+        if (!value) return null;
+        const trimmed = value.trim();
+        if (trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {
+            return value;
+          }
+        }
+        return value;
+      };
+
+      const resolveSignedValue = async (value: string | string[] | null) => {
+        if (!value) return null;
+        if (Array.isArray(value)) {
+          const signedList = await Promise.all(
+            value.map(async (url) => {
+              const key = contaboStorage.getKeyFromPublicUrl(url);
+              if (!key) return url;
+              const signed = await contaboStorage.getSignedDownloadUrl(key, 3600);
+              return signed || url;
+            })
+          );
+          return signedList;
+        }
+        const key = contaboStorage.getKeyFromPublicUrl(value);
+        if (!key) return value;
+        const signed = await contaboStorage.getSignedDownloadUrl(key, 3600);
+        return signed || value;
+      };
+
       const withSignedUrls = await Promise.all(
         history.map(async (item) => {
           const withSigned = { ...item } as any;
-          const resolveSigned = async (url?: string | null) => {
-            if (!url) return null;
-            const key = contaboStorage.getKeyFromPublicUrl(url);
-            if (!key) return url;
-            const signed = await contaboStorage.getSignedDownloadUrl(key, 3600);
-            return signed || url;
-          };
+          const nfeParsed = parseZipValue(item.zipNfePath);
+          const nfceParsed = parseZipValue(item.zipNfcePath);
+          const eventsParsed = parseZipValue(item.zipEventsPath);
 
-          withSigned.zipNfePath = await resolveSigned(item.zipNfePath);
-          withSigned.zipNfcePath = await resolveSigned(item.zipNfcePath);
-          withSigned.zipEventsPath = await resolveSigned(item.zipEventsPath);
+          withSigned.zipNfePath = await resolveSignedValue(nfeParsed);
+          withSigned.zipNfcePath = await resolveSignedValue(nfceParsed);
+          withSigned.zipEventsPath = await resolveSignedValue(eventsParsed);
           return withSigned;
         })
       );
@@ -6059,6 +6096,8 @@ ${company.razaoSocial}
         includeNfe = true,
         includeNfce = true,
         includeEvents = true,
+        batchSize,
+        useWorker,
       } = req.body;
 
       if (!companyId || !periodStart || !periodEnd) {
@@ -6171,37 +6210,107 @@ ${company.razaoSocial}
             return;
           }
 
+          const workerEnabled = process.env.XML_ZIP_WORKER_ENABLED === "true";
+          const workerUrl = process.env.XML_ZIP_WORKER_URL;
+          const workerThreshold = Number(process.env.XML_ZIP_WORKER_MIN_COUNT || 3000);
+          const batchLimit = Math.max(0, Number(batchSize || 0));
+
+          const buildWorkerZipUrl = async (
+            filename: string,
+            filepaths: string[]
+          ): Promise<{ url: string | null; count: number }> => {
+            if (!workerEnabled || !workerUrl) return { url: null, count: 0 };
+            if (filepaths.length < workerThreshold && useWorker !== true) {
+              return { url: null, count: 0 };
+            }
+            const keys = filepaths
+              .map((filepath) => contaboStorage.getKeyFromPublicUrl(filepath))
+              .filter((key): key is string => !!key);
+            if (keys.length !== filepaths.length) {
+              return { url: null, count: 0 };
+            }
+            const listKey = `${cleanCnpj}/downloads/lists/${history.id}_${filename}.json`;
+            const listPayload = Buffer.from(JSON.stringify(keys), "utf-8");
+            const upload = await contaboStorage.uploadFile(
+              listPayload,
+              listKey,
+              "application/json"
+            );
+            if (!upload.success) {
+              return { url: null, count: 0 };
+            }
+            const href = `${workerUrl}?listKey=${encodeURIComponent(listKey)}&filename=${encodeURIComponent(filename)}`;
+            return { url: href, count: keys.length };
+          };
+
           const uploadZip = async (filename: string, filepaths: string[]) => {
             if (filepaths.length === 0) return { url: null, count: 0 };
             await updateDownloadStage("build_zip", filename);
-            const entries = await buildZipEntries(filepaths, {
-              perFileTimeoutMs: 30000,
-              onProgress: async (progress) => {
-                await storage.updateXmlDownloadHistory(history.id, {
-                  currentStage: "build_zip",
-                  lastMessage: `${progress.status} ${progress.index}/${progress.total} ${progress.filepath}`,
-                  progressUpdatedAt: new Date(),
-                });
-              },
-            });
-            if (entries.length === 0) return { url: null, count: 0 };
-            const zipPath = path.join("/tmp", filename);
-            await updateDownloadStage("create_zip", filename);
-            await Promise.race([
-              createZipFile(entries, zipPath),
-              new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error("Timeout ao criar ZIP")), 10 * 60 * 1000)
-              ),
-            ]);
-            const buffer = await fs.readFile(zipPath);
-            await fs.unlink(zipPath).catch(() => {});
-            const key = `${cleanCnpj}/downloads/xmls/${filename}`;
-            await updateDownloadStage("upload_storage", filename);
-            const upload = await contaboStorage.uploadFile(buffer, key, "application/zip");
-            if (!upload.success || !upload.url) {
-              throw new Error(upload.error || "Erro ao salvar ZIP no storage");
+            const workerResult = await buildWorkerZipUrl(filename, filepaths);
+            if (workerResult.url) {
+              return workerResult;
             }
-            return { url: upload.url, count: entries.length };
+
+            const fileBatches =
+              batchLimit > 0 ? chunkArray(filepaths, batchLimit) : [filepaths];
+            const urls: string[] = [];
+            let okCount = 0;
+            let lastUpdateAt = 0;
+            let lastUpdateIndex = 0;
+            const shouldUpdateProgress = (progress: {
+              status: string;
+              index: number;
+              total: number;
+            }) => {
+              const now = Date.now();
+              if (progress.status === "error" || progress.status === "skip") return true;
+              if (progress.index === progress.total) return true;
+              if (now - lastUpdateAt >= 2000) return true;
+              if (progress.index - lastUpdateIndex >= 25) return true;
+              return false;
+            };
+            for (let batchIndex = 0; batchIndex < fileBatches.length; batchIndex += 1) {
+              const batchFiles = fileBatches[batchIndex];
+              const batchLabel =
+                fileBatches.length > 1 ? `Lote ${batchIndex + 1}/${fileBatches.length}` : null;
+              const batchFilename =
+                fileBatches.length > 1
+                  ? filename.replace(/\.zip$/i, `_PARTE_${batchIndex + 1}.zip`)
+                  : filename;
+              const zipPath = path.join("/tmp", batchFilename);
+              await createZipFileFromFilepaths(batchFiles, zipPath, {
+                perFileTimeoutMs: 30000,
+                concurrency: 8,
+                onProgress: async (progress) => {
+                  if (progress.status === "ok") okCount += 1;
+                  if (!shouldUpdateProgress(progress)) return;
+                  lastUpdateAt = Date.now();
+                  lastUpdateIndex = progress.index;
+                  const detail = `${progress.status} ${progress.index}/${progress.total} ${progress.filepath}`;
+                  await storage.updateXmlDownloadHistory(history.id, {
+                    currentStage: "build_zip",
+                    lastMessage: batchLabel ? `${batchLabel} - ${detail}` : detail,
+                    progressUpdatedAt: new Date(),
+                  });
+                },
+              });
+              if (okCount === 0) {
+                await fs.unlink(zipPath).catch(() => {});
+                continue;
+              }
+              await updateDownloadStage("create_zip", batchFilename);
+              const buffer = await fs.readFile(zipPath);
+              await fs.unlink(zipPath).catch(() => {});
+              const key = `${cleanCnpj}/downloads/xmls/${batchFilename}`;
+              await updateDownloadStage("upload_storage", batchFilename);
+              const upload = await contaboStorage.uploadFile(buffer, key, "application/zip");
+              if (!upload.success || !upload.url) {
+                throw new Error(upload.error || "Erro ao salvar ZIP no storage");
+              }
+              urls.push(upload.url);
+            }
+            if (urls.length === 0) return { url: null, count: 0 };
+            return { url: urls.length === 1 ? urls[0] : JSON.stringify(urls), count: okCount };
           };
 
           await updateDownloadStage("zip_nfe");
@@ -6281,6 +6390,20 @@ ${company.razaoSocial}
         }
       }
 
+      const parseZipValue = (value?: string | null): string[] => {
+        if (!value) return [];
+        const trimmed = value.trim();
+        if (trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {
+            return [value];
+          }
+        }
+        return [value];
+      };
+
       const deleteByUrl = async (url?: string | null) => {
         if (!url) return false;
         const key = contaboStorage.getKeyFromPublicUrl(url);
@@ -6288,11 +6411,13 @@ ${company.razaoSocial}
         return contaboStorage.deleteFile(key);
       };
 
-      await Promise.all([
-        deleteByUrl(target.zipNfePath),
-        deleteByUrl(target.zipNfcePath),
-        deleteByUrl(target.zipEventsPath),
-      ]);
+      const allUrls = [
+        ...parseZipValue(target.zipNfePath),
+        ...parseZipValue(target.zipNfcePath),
+        ...parseZipValue(target.zipEventsPath),
+      ];
+
+      await Promise.all(allUrls.map((url) => deleteByUrl(url)));
 
       await storage.updateXmlDownloadHistory(id, {
         zipNfePath: null,

@@ -4,6 +4,7 @@
  */
 
 import * as fs from 'fs/promises';
+import crypto from "crypto";
 import { getFile } from './contaboStorage';
 
 /**
@@ -87,6 +88,22 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
 export async function readXmlBuffer(filepath: string): Promise<Buffer | null> {
   try {
     if (isStorageUrl(filepath)) {
+      const cacheTtlMs = Number(process.env.XML_CACHE_TTL_MS || 0);
+      const cacheDir = process.env.XML_CACHE_DIR || "/tmp/xml-cache";
+      const cacheKey = crypto.createHash("sha1").update(filepath).digest("hex");
+      const cachePath = `${cacheDir}/${cacheKey}.xml`;
+
+      if (cacheTtlMs > 0) {
+        try {
+          const stats = await fs.stat(cachePath);
+          if (Date.now() - stats.mtimeMs <= cacheTtlMs) {
+            return await fs.readFile(cachePath);
+          }
+        } catch {
+          // cache miss
+        }
+      }
+
       // É URL do storage - baixa do storage
       const key = extractKeyFromStorageUrl(filepath);
       if (!key) {
@@ -95,6 +112,17 @@ export async function readXmlBuffer(filepath: string): Promise<Buffer | null> {
       }
       
       const buffer = await getFile(key);
+      if (!buffer) return null;
+
+      if (cacheTtlMs > 0) {
+        try {
+          await fs.mkdir(cacheDir, { recursive: true });
+          await fs.writeFile(cachePath, buffer);
+        } catch {
+          // ignore cache write errors
+        }
+      }
+
       return buffer;
     } else {
       // É caminho local - lê do sistema de arquivos
