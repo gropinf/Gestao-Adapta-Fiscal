@@ -1247,23 +1247,26 @@ export class DatabaseStorage implements IStorage {
     oldPrefix: string,
     newPrefix: string
   ): Promise<{ xmlsUpdated: number; eventsUpdated: number }> {
-    const xmlsResult = await db.execute(sql`
-      UPDATE ${xmls}
-      SET ${xmls.filepath} = REPLACE(${xmls.filepath}, ${oldPrefix}, ${newPrefix})
-      WHERE ${xmls.filepath} LIKE ${oldPrefix + "%"}
-        AND (${xmls.cnpjEmitente} = ${companyCnpj} OR ${xmls.cnpjDestinatario} = ${companyCnpj})
-    `);
+    const xmlsResult = await db
+      .update(xmls)
+      .set({ filepath: sql`replace(${xmls.filepath}, ${oldPrefix}, ${newPrefix})` })
+      .where(
+        and(
+          like(xmls.filepath, `${oldPrefix}%`),
+          or(eq(xmls.cnpjEmitente, companyCnpj), eq(xmls.cnpjDestinatario, companyCnpj))
+        )
+      )
+      .returning({ id: xmls.id });
 
-    const eventsResult = await db.execute(sql`
-      UPDATE ${xmlEvents}
-      SET ${xmlEvents.filepath} = REPLACE(${xmlEvents.filepath}, ${oldPrefix}, ${newPrefix})
-      WHERE ${xmlEvents.filepath} LIKE ${oldPrefix + "%"}
-        AND ${xmlEvents.cnpj} = ${companyCnpj}
-    `);
+    const eventsResult = await db
+      .update(xmlEvents)
+      .set({ filepath: sql`replace(${xmlEvents.filepath}, ${oldPrefix}, ${newPrefix})` })
+      .where(and(like(xmlEvents.filepath, `${oldPrefix}%`), eq(xmlEvents.cnpj, companyCnpj)))
+      .returning({ id: xmlEvents.id });
 
     return {
-      xmlsUpdated: Number(xmlsResult.rowCount || 0),
-      eventsUpdated: Number(eventsResult.rowCount || 0),
+      xmlsUpdated: xmlsResult.length,
+      eventsUpdated: eventsResult.length,
     };
   }
 

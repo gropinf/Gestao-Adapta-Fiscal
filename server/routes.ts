@@ -6408,6 +6408,9 @@ ${company.razaoSocial}
       if (!company) {
         return res.status(404).json({ error: "Empresa não encontrada" });
       }
+      if (!company.cnpj) {
+        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+      }
 
       const result = await storage.replaceStoragePrefixForCompany(
         company.cnpj,

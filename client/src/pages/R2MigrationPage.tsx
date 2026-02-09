@@ -95,6 +95,19 @@ export default function R2MigrationPage() {
     return () => clearInterval(interval);
   }, [running]);
 
+  const parseJsonResponse = async (res: Response) => {
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+        throw new Error("Resposta HTML inesperada. Verifique se o backend foi atualizado.");
+      }
+      throw new Error(text);
+    }
+  };
+
   const startMigration = async () => {
     setError(null);
     if (!currentCompanyId) {
@@ -115,7 +128,7 @@ export default function R2MigrationPage() {
         filepathUrlPrefix: filepathUrlPrefix.trim() || null,
         companyId: currentCompanyId,
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       setLatest(data.run || null);
       setConfirmText("");
     } catch (err: any) {
@@ -156,7 +169,7 @@ export default function R2MigrationPage() {
         oldPrefix: replaceOldPrefix.trim(),
         newPrefix: replaceNewPrefix.trim(),
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       setReplaceResult({
         xmlsUpdated: data.xmlsUpdated || 0,
         eventsUpdated: data.eventsUpdated || 0,
