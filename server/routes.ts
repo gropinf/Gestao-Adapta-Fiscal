@@ -6399,24 +6399,31 @@ ${company.razaoSocial}
 
   app.post("/api/r2-migration/replace-prefix", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
     try {
-      const { companyId, oldPrefix, newPrefix } = req.body || {};
-      if (!companyId || !oldPrefix || !newPrefix) {
-        return res.status(400).json({ error: "companyId, oldPrefix e newPrefix são obrigatórios" });
+      const { companyId, oldPrefix, newPrefix, scope } = req.body || {};
+      if (!oldPrefix || !newPrefix) {
+        return res.status(400).json({ error: "oldPrefix e newPrefix são obrigatórios" });
       }
 
-      const company = await storage.getCompany(companyId);
-      if (!company) {
-        return res.status(404).json({ error: "Empresa não encontrada" });
-      }
-      if (!company.cnpj) {
-        return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
-      }
+      const result =
+        scope === "all"
+          ? await storage.replaceStoragePrefixAll(oldPrefix, newPrefix)
+          : await (async () => {
+              if (!companyId) {
+                return res.status(400).json({ error: "companyId é obrigatório para escopo por empresa" });
+              }
+              const company = await storage.getCompany(companyId);
+              if (!company) {
+                return res.status(404).json({ error: "Empresa não encontrada" });
+              }
+              if (!company.cnpj) {
+                return res.status(400).json({ error: "Empresa não possui CNPJ cadastrado" });
+              }
+              return storage.replaceStoragePrefixForCompany(company.cnpj, oldPrefix, newPrefix);
+            })();
 
-      const result = await storage.replaceStoragePrefixForCompany(
-        company.cnpj,
-        oldPrefix,
-        newPrefix
-      );
+      if ("status" in result) {
+        return;
+      }
 
       res.json({ success: true, ...result });
     } catch (error: any) {

@@ -228,6 +228,10 @@ export interface IStorage {
     oldPrefix: string,
     newPrefix: string
   ): Promise<{ xmlsUpdated: number; eventsUpdated: number }>;
+  replaceStoragePrefixAll(
+    oldPrefix: string,
+    newPrefix: string
+  ): Promise<{ xmlsUpdated: number; eventsUpdated: number }>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1262,6 +1266,28 @@ export class DatabaseStorage implements IStorage {
       .update(xmlEvents)
       .set({ filepath: sql`replace(${xmlEvents.filepath}, ${oldPrefix}, ${newPrefix})` })
       .where(and(like(xmlEvents.filepath, `${oldPrefix}%`), eq(xmlEvents.cnpj, companyCnpj)))
+      .returning({ id: xmlEvents.id });
+
+    return {
+      xmlsUpdated: xmlsResult.length,
+      eventsUpdated: eventsResult.length,
+    };
+  }
+
+  async replaceStoragePrefixAll(
+    oldPrefix: string,
+    newPrefix: string
+  ): Promise<{ xmlsUpdated: number; eventsUpdated: number }> {
+    const xmlsResult = await db
+      .update(xmls)
+      .set({ filepath: sql`replace(${xmls.filepath}, ${oldPrefix}, ${newPrefix})` })
+      .where(like(xmls.filepath, `${oldPrefix}%`))
+      .returning({ id: xmls.id });
+
+    const eventsResult = await db
+      .update(xmlEvents)
+      .set({ filepath: sql`replace(${xmlEvents.filepath}, ${oldPrefix}, ${newPrefix})` })
+      .where(like(xmlEvents.filepath, `${oldPrefix}%`))
       .returning({ id: xmlEvents.id });
 
     return {

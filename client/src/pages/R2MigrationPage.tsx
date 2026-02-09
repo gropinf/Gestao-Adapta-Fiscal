@@ -45,6 +45,7 @@ export default function R2MigrationPage() {
   );
   const [replaceResult, setReplaceResult] = useState<{ xmlsUpdated: number; eventsUpdated: number } | null>(null);
   const [replaceRunning, setReplaceRunning] = useState(false);
+  const [replaceScopeAll, setReplaceScopeAll] = useState(true);
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
 
   useEffect(() => {
@@ -154,10 +155,6 @@ export default function R2MigrationPage() {
   };
 
   const replacePrefix = async () => {
-    if (!currentCompanyId) {
-      setError("Selecione uma empresa para ajustar o prefixo.");
-      return;
-    }
     if (!confirm("Deseja ajustar o prefixo dos filepaths no banco?")) {
       return;
     }
@@ -165,9 +162,10 @@ export default function R2MigrationPage() {
     setReplaceResult(null);
     try {
       const res = await apiRequest("POST", "/api/r2-migration/replace-prefix", {
-        companyId: currentCompanyId,
+        companyId: replaceScopeAll ? null : currentCompanyId,
         oldPrefix: replaceOldPrefix.trim(),
         newPrefix: replaceNewPrefix.trim(),
+        scope: replaceScopeAll ? "all" : "company",
       });
       const data = await parseJsonResponse(res);
       setReplaceResult({
@@ -214,6 +212,19 @@ export default function R2MigrationPage() {
                 placeholder="ex: https://usc1.contabostorage.com/caixafacil/48718004000136/xml"
               />
             </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="replaceScopeAll">Aplicar em todas as empresas</Label>
+              <div className="text-xs text-muted-foreground">
+                Se desligado, aplica apenas na empresa selecionada.
+              </div>
+            </div>
+            <Switch
+              id="replaceScopeAll"
+              checked={replaceScopeAll}
+              onCheckedChange={setReplaceScopeAll}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="filepathUrlPrefix">Prefixo base do Contabo</Label>
