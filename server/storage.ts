@@ -223,6 +223,11 @@ export interface IStorage {
   updateR2MigrationRun(id: string, data: Partial<InsertR2MigrationRun>): Promise<R2MigrationRun | undefined>;
   getLatestR2MigrationRun(): Promise<R2MigrationRun | undefined>;
   getR2MigrationRunById(id: string): Promise<R2MigrationRun | undefined>;
+  replaceStoragePrefixForCompany(
+    companyCnpj: string,
+    oldPrefix: string,
+    newPrefix: string
+  ): Promise<{ xmlsUpdated: number; eventsUpdated: number }>;
   getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]>;
   getCompanyById(companyId: string): Promise<Company | undefined>;
   
@@ -1235,6 +1240,31 @@ export class DatabaseStorage implements IStorage {
       .where(eq(r2MigrationRuns.id, id))
       .limit(1);
     return run || undefined;
+  }
+
+  async replaceStoragePrefixForCompany(
+    companyCnpj: string,
+    oldPrefix: string,
+    newPrefix: string
+  ): Promise<{ xmlsUpdated: number; eventsUpdated: number }> {
+    const xmlsResult = await db.execute(sql`
+      UPDATE ${xmls}
+      SET ${xmls.filepath} = REPLACE(${xmls.filepath}, ${oldPrefix}, ${newPrefix})
+      WHERE ${xmls.filepath} LIKE ${oldPrefix + "%"}
+        AND (${xmls.cnpjEmitente} = ${companyCnpj} OR ${xmls.cnpjDestinatario} = ${companyCnpj})
+    `);
+
+    const eventsResult = await db.execute(sql`
+      UPDATE ${xmlEvents}
+      SET ${xmlEvents.filepath} = REPLACE(${xmlEvents.filepath}, ${oldPrefix}, ${newPrefix})
+      WHERE ${xmlEvents.filepath} LIKE ${oldPrefix + "%"}
+        AND ${xmlEvents.cnpj} = ${companyCnpj}
+    `);
+
+    return {
+      xmlsUpdated: Number(xmlsResult.rowCount || 0),
+      eventsUpdated: Number(eventsResult.rowCount || 0),
+    };
   }
 
   async getXmlsByPeriod(companyId: string, periodStart: string, periodEnd: string): Promise<Xml[]> {

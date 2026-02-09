@@ -6397,6 +6397,31 @@ ${company.razaoSocial}
     }
   });
 
+  app.post("/api/r2-migration/replace-prefix", authMiddleware, isAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { companyId, oldPrefix, newPrefix } = req.body || {};
+      if (!companyId || !oldPrefix || !newPrefix) {
+        return res.status(400).json({ error: "companyId, oldPrefix e newPrefix são obrigatórios" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      if (!company) {
+        return res.status(404).json({ error: "Empresa não encontrada" });
+      }
+
+      const result = await storage.replaceStoragePrefixForCompany(
+        company.cnpj,
+        oldPrefix,
+        newPrefix
+      );
+
+      res.json({ success: true, ...result });
+    } catch (error: any) {
+      console.error("Erro ao ajustar prefixo do storage:", error);
+      res.status(500).json({ error: "Erro ao ajustar prefixo do storage" });
+    }
+  });
+
   // POST /api/xml-downloads/:id/cancel - Marca download como cancelado/falha
   app.post("/api/xml-downloads/:id/cancel", authMiddleware, async (req: AuthRequest, res) => {
     try {

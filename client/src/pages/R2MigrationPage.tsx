@@ -37,6 +37,14 @@ export default function R2MigrationPage() {
   const [running, setRunning] = useState(false);
   const [latest, setLatest] = useState<R2MigrationRun | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [replaceOldPrefix, setReplaceOldPrefix] = useState(
+    "https://usc1.contabostorage.com/"
+  );
+  const [replaceNewPrefix, setReplaceNewPrefix] = useState(
+    "https://2bc5d0df678f03bc392ae1480a9cb559.r2.cloudflarestorage.com/"
+  );
+  const [replaceResult, setReplaceResult] = useState<{ xmlsUpdated: number; eventsUpdated: number } | null>(null);
+  const [replaceRunning, setReplaceRunning] = useState(false);
   const currentCompanyId = useAuthStore((state) => state.currentCompanyId);
 
   useEffect(() => {
@@ -132,6 +140,34 @@ export default function R2MigrationPage() {
     }
   };
 
+  const replacePrefix = async () => {
+    if (!currentCompanyId) {
+      setError("Selecione uma empresa para ajustar o prefixo.");
+      return;
+    }
+    if (!confirm("Deseja ajustar o prefixo dos filepaths no banco?")) {
+      return;
+    }
+    setReplaceRunning(true);
+    setReplaceResult(null);
+    try {
+      const res = await apiRequest("POST", "/api/r2-migration/replace-prefix", {
+        companyId: currentCompanyId,
+        oldPrefix: replaceOldPrefix.trim(),
+        newPrefix: replaceNewPrefix.trim(),
+      });
+      const data = await res.json();
+      setReplaceResult({
+        xmlsUpdated: data.xmlsUpdated || 0,
+        eventsUpdated: data.eventsUpdated || 0,
+      });
+    } catch (err: any) {
+      setError(err?.message || "Falha ao ajustar prefixo");
+    } finally {
+      setReplaceRunning(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -224,6 +260,46 @@ export default function R2MigrationPage() {
               Cancelar
             </Button>
             {error && <div className="text-sm text-red-600">{error}</div>}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ajustar prefixo do storage</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-sm text-muted-foreground">
+            Use esta ação quando os arquivos já foram copiados para o R2 e você só precisa
+            atualizar o prefixo das URLs no banco.
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="replaceOldPrefix">Prefixo antigo</Label>
+              <Input
+                id="replaceOldPrefix"
+                value={replaceOldPrefix}
+                onChange={(e) => setReplaceOldPrefix(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="replaceNewPrefix">Prefixo novo</Label>
+              <Input
+                id="replaceNewPrefix"
+                value={replaceNewPrefix}
+                onChange={(e) => setReplaceNewPrefix(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button onClick={replacePrefix} disabled={replaceRunning}>
+              {replaceRunning ? "Ajustando..." : "Ajustar prefixo"}
+            </Button>
+            {replaceResult && (
+              <div className="text-sm text-muted-foreground">
+                XMLs: {replaceResult.xmlsUpdated} | Eventos: {replaceResult.eventsUpdated}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
