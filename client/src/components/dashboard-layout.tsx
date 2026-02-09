@@ -41,6 +41,7 @@ import {
 import { useLocation } from "wouter";
 import { useAuthStore, getAuthHeader } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import type { Company } from "@shared/schema";
 import { UserProfileMenu } from "./UserProfileMenu";
 
@@ -282,6 +283,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }
     
     setCurrentCompany(newCompanyId);
+    queryClient.invalidateQueries();
   };
 
   const style = {
@@ -315,7 +317,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                       data-testid="button-company-selector"
                     >
                       <Building2 className="w-4 h-4" />
-                      <span className="font-medium">{currentCompany?.nomeFantasia || currentCompany?.razaoSocial}</span>
+                      <span className="font-medium">
+                        {currentCompany?.nomeFantasia || currentCompany?.razaoSocial}
+                      </span>
                       <ChevronDown className="w-4 h-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -339,9 +343,24 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
+              {currentCompany ? (
+                <div className="flex flex-col text-xs text-muted-foreground">
+                  <span>{currentCompany.razaoSocial}</span>
+                  <span>{formatCNPJ(currentCompany.cnpj)}</span>
+                </div>
+              ) : null}
             </div>
 
-            <UserProfileMenu />
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLocation("/selecionar-empresa")}
+              >
+                Selecionar outra empresa
+              </Button>
+              <UserProfileMenu />
+            </div>
           </header>
 
           {/* Main content */}

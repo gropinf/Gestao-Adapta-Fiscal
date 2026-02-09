@@ -183,6 +183,11 @@ Regras:
 - O CNPJ do evento precisa ser o mesmo da empresa da API key.
 - Duplicidades são rejeitadas.
 
+Observação importante:
+- Eventos enviados para `/api/api-upload` (notas) **não** são registrados em `xml_events`.
+- Para eventos, use **sempre** `/api/api-xml-events/upload`.
+- A resposta retorna `success` e `errors`. Mesmo com HTTP 200, verifique `errors` para saber se algum evento foi recusado.
+
 ## 6) Listar e revogar API Keys (JWT)
 
 Listar:
@@ -217,6 +222,14 @@ curl -X DELETE "https://SEU_DOMINIO/api/api-keys/UUID_DA_CHAVE" \
 - `XML não autorizado`: SEFAZ não autorizou a nota.
 - `CNPJ do XML não pertence`: XML de outra empresa.
 - `Nenhum XML encontrado no arquivo ZIP`: arquivo compactado sem XMLs válidos.
+- `Evento não aparece no sistema`: verifique se o endpoint usado foi `/api/api-xml-events/upload`.
+
+### Eventos não aparecem no download por período
+
+Se os eventos foram enviados por API mas não aparecem no download:
+- Verifique se a data `dataEvento` do XML está dentro do período selecionado.
+- Confira o retorno do upload (campo `errors`).
+- Garanta que a API key pertence à mesma empresa selecionada no portal.
 
 ## 9) Limites de upload
 

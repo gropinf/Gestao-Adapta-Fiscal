@@ -260,7 +260,7 @@ export default function BaixarXmls() {
     document.body.removeChild(a);
 
     const shouldDelete = window.confirm(
-      "Download iniciado. Deseja remover os arquivos do storage para economizar espaço?"
+      "Download iniciado com sucesso. Deseja remover os arquivos do armazenamento agora? Essa ação libera espaço e impede novos downloads destes arquivos."
     );
     if (!shouldDelete) return;
 
@@ -441,29 +441,35 @@ export default function BaixarXmls() {
                           <div className="flex items-center gap-2">
                             {item.zipNfePath && (
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
+                                className="gap-1"
                                 onClick={() => handleDownload(item, item.zipNfePath!)}
                               >
-                                NFe
+                                <Download className="h-3 w-3" />
+                                Baixar NFe
                               </Button>
                             )}
                             {item.zipNfcePath && (
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
+                                className="gap-1"
                                 onClick={() => handleDownload(item, item.zipNfcePath!)}
                               >
-                                NFCe
+                                <Download className="h-3 w-3" />
+                                Baixar NFCe
                               </Button>
                             )}
                             {item.zipEventsPath && (
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
+                                className="gap-1"
                                 onClick={() => handleDownload(item, item.zipEventsPath!)}
                               >
-                                Eventos
+                                <Download className="h-3 w-3" />
+                                Baixar Eventos
                               </Button>
                             )}
                             {!item.zipNfePath && !item.zipNfcePath && !item.zipEventsPath && (

@@ -6126,7 +6126,11 @@ ${company.razaoSocial}
             throw new Error("Empresa não encontrada");
           }
 
-          const formatDateFilename = (dateStr: string) => dateStr.replace(/-/g, "");
+          const formatDateFilename = (dateStr: string) => {
+            const [year, month, day] = dateStr.split("-");
+            if (!year || !month || !day) return dateStr.replace(/-/g, "");
+            return `${day}${month}${year}`;
+          };
           const sanitizeFilename = (text: string) =>
             text
               .normalize("NFD")
@@ -6147,10 +6151,12 @@ ${company.razaoSocial}
           const allEvents = includeEvents ? await storage.getXmlEventsByCompany(companyId) : [];
           const isWithinPeriod = (dateStr?: string | null) =>
             !!dateStr && dateStr >= periodStart && dateStr <= periodEnd;
-          const matchesModel = (model?: string | null) =>
-            (model === "55" && includeNfe) ||
-            (model === "65" && includeNfce) ||
-            (!model && (includeNfe || includeNfce));
+          const matchesModel = (model?: string | null) => {
+            if (!includeNfe && !includeNfce) return true;
+            if (model === "55") return includeNfe;
+            if (model === "65") return includeNfce;
+            return includeNfe || includeNfce;
+          };
 
           const events = includeEvents
             ? allEvents.filter((event) => isWithinPeriod(event.dataEvento) && matchesModel(event.modelo))
