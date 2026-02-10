@@ -6224,7 +6224,13 @@ ${company.razaoSocial}
               return { url: null, count: 0 };
             }
             const keys = filepaths
-              .map((filepath) => contaboStorage.getKeyFromPublicUrl(filepath))
+              .map((filepath) => {
+                if (!filepath) return null;
+                if (filepath.startsWith("http://") || filepath.startsWith("https://")) {
+                  return contaboStorage.getKeyFromPublicUrl(filepath);
+                }
+                return filepath;
+              })
               .filter((key): key is string => !!key);
             if (keys.length !== filepaths.length) {
               return { url: null, count: 0 };

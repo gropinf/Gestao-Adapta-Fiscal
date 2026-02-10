@@ -1,17 +1,52 @@
 import { Zip } from "fflate";
 
+type R2Bucket = any;
+
 type Env = {
   XML_BUCKET: R2Bucket;
 };
 
-type ListEntry = string | { key: string; name?: string };
+type ListEntry = string | { key?: string; url?: string; name?: string };
 
-const normalizeEntry = (entry: ListEntry) => {
+type NormalizedEntry = {
+  key: string;
+  name: string;
+};
+
+const isUrl = (value: string) => value.startsWith("http://") || value.startsWith("https://");
+
+const extractKeyFromUrl = (url: string): string | null => {
+  try {
+    const urlObj = new URL(url);
+    const parts = urlObj.pathname.split("/").filter((p) => p);
+    if (parts.length < 2) return null;
+    return parts.slice(1).join("/");
+  } catch {
+    return null;
+  }
+};
+
+const normalizeEntry = (entry: ListEntry): NormalizedEntry | null => {
   if (typeof entry === "string") {
     const name = entry.split("/").pop() || entry;
+    if (isUrl(entry)) {
+      const key = extractKeyFromUrl(entry);
+      if (!key) return null;
+      return { key, name };
+    }
     return { key: entry, name };
   }
-  return { key: entry.key, name: entry.name || entry.key.split("/").pop() || entry.key };
+  if (entry.key) {
+    const name = entry.name || entry.key.split("/").pop() || entry.key;
+    return { key: entry.key, name };
+  }
+  if (entry.url) {
+    const key = extractKeyFromUrl(entry.url);
+    if (!key) return null;
+    const name = entry.name || entry.url.split("/").pop() || entry.url;
+    return { key, name };
+  }
+  return null;
 };
 
 const getConcurrency = (value: string | null) => {
@@ -67,23 +102,30 @@ export default {
           while (active < concurrency && index < list.length) {
             const entry = normalizeEntry(list[index++]);
             active += 1;
+            const finish = () => {
+              active -= 1;
+              finished += 1;
+              if (finished === list.length) {
+                zip.end();
+                return;
+              }
+              pump();
+            };
+
+            if (!entry) {
+              finish();
+              continue;
+            }
+
             env.XML_BUCKET
               .get(entry.key)
-              .then(async (obj) => {
+              .then(async (obj: any) => {
                 if (!obj) return;
                 const buffer = new Uint8Array(await obj.arrayBuffer());
-                zip.add(entry.name, buffer);
+                (zip as any).add(entry.name, buffer);
               })
               .catch(() => {})
-              .finally(() => {
-                active -= 1;
-                finished += 1;
-                if (finished === list.length) {
-                  zip.end();
-                  return;
-                }
-                pump();
-              });
+              .finally(() => finish());
           }
         };
 

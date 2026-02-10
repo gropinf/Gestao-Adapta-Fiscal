@@ -413,7 +413,13 @@ export async function sendXmlsByEmail(
       if (!workerEnabled || !workerUrl) return null;
       if (workerThreshold > 0 && totalCount < workerThreshold) return null;
       const keys = filepaths
-        .map((filepath) => contaboStorage.getKeyFromPublicUrl(filepath))
+        .map((filepath) => {
+          if (!filepath) return null;
+          if (filepath.startsWith("http://") || filepath.startsWith("https://")) {
+            return contaboStorage.getKeyFromPublicUrl(filepath);
+          }
+          return filepath;
+        })
         .filter((key): key is string => !!key);
       if (keys.length !== filepaths.length) return null;
       const listKey = `${contaboStorage.sanitizeCnpj(company.cnpj)}/downloads/lists/${crypto.randomUUID()}_${filename}.json`;
