@@ -1,21 +1,13 @@
+/**
+ * Worker ZIP - versão JavaScript para deploy (wrangler).
+ * Copie este arquivo para zip-worker/zip-worker/src/index.js no projeto de deploy.
+ * Última atualização: 2026-02-10, 22:00 (BRT).
+ */
 import { Zip, ZipPassThrough } from "fflate";
 
-type R2Bucket = any;
+const isUrl = (value) => value.startsWith("http://") || value.startsWith("https://");
 
-type Env = {
-  XML_BUCKET: R2Bucket;
-};
-
-type ListEntry = string | { key?: string; url?: string; name?: string };
-
-type NormalizedEntry = {
-  key: string;
-  name: string;
-};
-
-const isUrl = (value: string) => value.startsWith("http://") || value.startsWith("https://");
-
-const extractKeyFromUrl = (url: string): string | null => {
+const extractKeyFromUrl = (url) => {
   try {
     const urlObj = new URL(url);
     const parts = urlObj.pathname.split("/").filter((p) => p);
@@ -26,7 +18,7 @@ const extractKeyFromUrl = (url: string): string | null => {
   }
 };
 
-const normalizeEntry = (entry: ListEntry): NormalizedEntry | null => {
+const normalizeEntry = (entry) => {
   if (typeof entry === "string") {
     const name = entry.split("/").pop() || entry;
     if (isUrl(entry)) {
@@ -49,25 +41,13 @@ const normalizeEntry = (entry: ListEntry): NormalizedEntry | null => {
   return null;
 };
 
-const getConcurrency = (value: string | null) => {
+const getConcurrency = (value) => {
   const parsed = Number(value || 0);
   if (Number.isNaN(parsed) || parsed <= 0) return 6;
   return Math.min(parsed, 20);
 };
 
-type DebugRef = {
-  addedCount: number;
-  notFoundCount: number;
-  resolve: (r: Response) => void;
-};
-
-function runPump(
-  zip: Zip,
-  list: ListEntry[],
-  concurrency: number,
-  env: Env,
-  ref: DebugRef | null
-): void {
+function runPump(zip, list, concurrency, env, ref) {
   let active = 0;
   let index = 0;
   let finished = 0;
@@ -86,9 +66,7 @@ function runPump(
             ref.addedCount = addedCount;
             ref.notFoundCount = notFoundCount;
           }
-          console.log(
-            `[Worker ZIP] Concluído: ${addedCount} adicionados, ${notFoundCount} não encontrados, total ${list.length}`
-          );
+          console.log(`[Worker ZIP] Concluído: ${addedCount} adicionados, ${notFoundCount} não encontrados, total ${list.length}`);
           zip.end();
           return;
         }
@@ -104,7 +82,7 @@ function runPump(
       const keyToFetch = entry.key;
       env.XML_BUCKET
         .get(keyToFetch)
-        .then(async (obj: R2ObjectBody | null) => {
+        .then(async (obj) => {
           if (!obj) {
             notFoundCount += 1;
             if (notFoundCount <= 5) {
@@ -112,13 +90,13 @@ function runPump(
             }
             return;
           }
-          let buffer: Uint8Array;
+          let buffer;
           try {
-            if (typeof (obj as any).arrayBuffer === "function") {
-              const ab = await (obj as any).arrayBuffer();
+            if (typeof obj.arrayBuffer === "function") {
+              const ab = await obj.arrayBuffer();
               buffer = ab ? new Uint8Array(ab) : new Uint8Array(0);
-            } else if ((obj as any).body) {
-              const ab = await new Response((obj as any).body).arrayBuffer();
+            } else if (obj.body) {
+              const ab = await new Response(obj.body).arrayBuffer();
               buffer = ab ? new Uint8Array(ab) : new Uint8Array(0);
             } else {
               console.warn(`[Worker ZIP] Objeto R2 sem body/arrayBuffer. Key: ${keyToFetch}`);
@@ -142,7 +120,7 @@ function runPump(
             console.log(`[Worker ZIP] Adicionado: ${entry.name} (${buffer.length} bytes)`);
           }
         })
-        .catch((err: unknown) => {
+        .catch((err) => {
           notFoundCount += 1;
           console.error(`[Worker ZIP] Erro ao buscar key "${keyToFetch}":`, err);
         })
@@ -153,10 +131,8 @@ function runPump(
   pump();
 }
 
-type R2ObjectBody = { arrayBuffer(): Promise<ArrayBuffer> };
-
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const listKey = url.searchParams.get("listKey");
     const filename = url.searchParams.get("filename") || "xmls.zip";
@@ -172,7 +148,7 @@ export default {
       return new Response("list not found", { status: 404 });
     }
 
-    let list: ListEntry[] = [];
+    let list = [];
     try {
       const text = await listObject.text();
       list = JSON.parse(text);
@@ -200,9 +176,9 @@ export default {
     }
 
     if (debug) {
-      const chunks: Uint8Array[] = [];
-      const ref: DebugRef = { addedCount: 0, notFoundCount: 0, resolve: () => {} };
-      const responsePromise = new Promise<Response>((resolve) => {
+      const chunks = [];
+      const ref = { addedCount: 0, notFoundCount: 0, resolve: null };
+      const responsePromise = new Promise((resolve) => {
         ref.resolve = resolve;
       });
 
@@ -238,7 +214,7 @@ export default {
       return responsePromise;
     }
 
-    const stream = new ReadableStream<Uint8Array>({
+    const stream = new ReadableStream({
       start(controller) {
         const zip = new Zip((error, data, final) => {
           if (error) {

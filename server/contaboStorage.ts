@@ -500,27 +500,37 @@ export function getKeyFromPublicUrl(url: string): string | null {
     const contaboBucket = process.env.CONTABO_STORAGE_BUCKET;
     const r2Bucket = process.env.R2_BUCKET;
 
+    // Parse URL primeiro
+    const urlObj = new URL(url);
+    let pathParts = urlObj.pathname.split('/').filter((p) => p);
+    
+    if (pathParts.length === 0) return null;
+
+    // Tenta remover endpoint conhecido
     let normalized = url;
     if (r2Endpoint && normalized.startsWith(r2Endpoint)) {
       normalized = normalized.slice(r2Endpoint.length);
+      pathParts = normalized.split('/').filter((p) => p);
     } else if (contaboEndpoint && normalized.startsWith(contaboEndpoint)) {
       normalized = normalized.slice(contaboEndpoint.length);
+      pathParts = normalized.split('/').filter((p) => p);
     }
 
-    normalized = normalized.replace(/^\/+/, "");
-    if (r2Bucket && normalized.startsWith(`${r2Bucket}/`)) {
-      return normalized.slice(r2Bucket.length + 1);
+    // Remove bucket se for o primeiro segmento
+    if (pathParts.length >= 2) {
+      const firstPart = pathParts[0];
+      if ((r2Bucket && firstPart === r2Bucket) || (contaboBucket && firstPart === contaboBucket)) {
+        return pathParts.slice(1).join('/');
+      }
+      // Se não encontrou bucket no início, retorna tudo menos o primeiro (assumindo que é bucket)
+      return pathParts.slice(1).join('/');
     }
-    if (contaboBucket && normalized.startsWith(`${contaboBucket}/`)) {
-      return normalized.slice(contaboBucket.length + 1);
-    }
-
-    // fallback: parse URL path and remove bucket segment
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split('/').filter((p) => p);
+    
+    // Fallback: retorna tudo menos o primeiro segmento
     if (pathParts.length >= 2) {
       return pathParts.slice(1).join('/');
     }
+    
     return null;
   } catch (error) {
     console.error("Erro ao extrair key do URL:", error);

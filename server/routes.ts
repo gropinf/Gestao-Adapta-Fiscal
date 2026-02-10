@@ -6227,15 +6227,30 @@ ${company.razaoSocial}
               .map((filepath) => {
                 if (!filepath) return null;
                 if (filepath.startsWith("http://") || filepath.startsWith("https://")) {
-                  return contaboStorage.getKeyFromPublicUrl(filepath);
+                  const key = contaboStorage.getKeyFromPublicUrl(filepath);
+                  if (!key) {
+                    console.warn(`[Worker ZIP] Não foi possível extrair key de: ${filepath}`);
+                  }
+                  return key;
                 }
                 return filepath;
               })
               .filter((key): key is string => !!key);
             if (keys.length !== filepaths.length) {
+              console.warn(`[Worker ZIP] Apenas ${keys.length}/${filepaths.length} keys extraídas. Fallback para ZIP local.`);
               return { url: null, count: 0 };
             }
+            if (keys.length > 0) {
+              const firstKeyExists = await contaboStorage.fileExistsInR2(keys[0]);
+              if (!firstKeyExists) {
+                console.warn(
+                  `[Worker ZIP] Primeira key não existe no R2 (R2_BUCKET=${process.env.R2_BUCKET || "(não definido)"}). Key: ${keys[0]}. Fallback para ZIP local.`
+                );
+                return { url: null, count: 0 };
+              }
+            }
             const listKey = `${cleanCnpj}/downloads/lists/${history.id}_${filename}.json`;
+            console.log(`[Worker ZIP] Salvando lista com ${keys.length} keys. Primeira key: ${keys[0]?.substring(0, 50)}...`);
             const listPayload = Buffer.from(JSON.stringify(keys), "utf-8");
             const upload = await contaboStorage.uploadFile(
               listPayload,

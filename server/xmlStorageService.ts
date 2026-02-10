@@ -57,7 +57,7 @@ export async function saveXmlToContabo(
     
     // Log para debug: mostra qual CNPJ está sendo usado
     const cnpjSource = parsedXml.cnpjEmitente ? 'emitente' : 'destinatário';
-    console.log(`[Contabo Storage] Salvando XML ${cleanChave.substring(0, 12)}... usando CNPJ ${cnpjSource}: ${cleanCnpj}`);
+    console.log(`[R2 Storage] Salvando XML ${cleanChave.substring(0, 12)}... usando CNPJ ${cnpjSource}: ${cleanCnpj}`);
     
     const buffer = typeof xmlContent === 'string' 
       ? Buffer.from(xmlContent, 'utf-8') 
@@ -75,7 +75,7 @@ export async function saveXmlToContabo(
       };
     }
 
-    console.log(`[Contabo Storage] ✅ XML salvo com sucesso: ${key} -> ${result.url}`);
+    console.log(`[R2 Storage] ✅ XML salvo com sucesso: ${key} -> ${result.url}`);
     
     return {
       success: true,
@@ -143,7 +143,7 @@ export async function saveEventXmlToContabo(
     // Estrutura: {CNPJ}/xml_events/YYYYMM/{fileName} (ou YYYY se faltar ano/mes)
     const key = `${cleanCnpj}/xml_events/${yearMonthFolder || fallbackYear}/${fileName}`;
     
-    console.log(`[Contabo Storage] Salvando evento XML usando CNPJ do evento: ${cleanCnpj} -> ${key}`);
+    console.log(`[R2 Storage] Salvando evento XML usando CNPJ do evento: ${cleanCnpj} -> ${key}`);
     
     const result = await uploadFile(buffer, key, 'application/xml');
     
@@ -154,7 +154,7 @@ export async function saveEventXmlToContabo(
       };
     }
 
-    console.log(`[Contabo Storage] ✅ Evento XML salvo com sucesso: ${key} -> ${result.url}`);
+    console.log(`[R2 Storage] ✅ Evento XML salvo com sucesso: ${key} -> ${result.url}`);
     
     return {
       success: true,

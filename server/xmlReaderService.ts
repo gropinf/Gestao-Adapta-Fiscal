@@ -1,5 +1,5 @@
 /**
- * Serviço para ler XMLs do sistema de arquivos local ou do Contabo Storage
+ * Serviço para ler XMLs do sistema de arquivos local ou do R2/Cloudflare Storage
  * Detecta automaticamente a origem do arquivo baseado no filepath
  */
 
@@ -8,7 +8,7 @@ import crypto from "crypto";
 import { getFile } from './contaboStorage';
 
 /**
- * Verifica se um filepath é uma URL do Contabo Storage
+ * Verifica se um filepath é uma URL do R2/Cloudflare Storage
  */
 export function isStorageUrl(filepath: string): boolean {
   if (!filepath) return false;
@@ -16,8 +16,8 @@ export function isStorageUrl(filepath: string): boolean {
 }
 
 /**
- * Extrai a chave (key) de uma URL do Contabo Storage
- * Exemplo: https://usc1.contabostorage.com/bucket/12345678000190/xml/12345678901234567890123456789012345678901234.xml
+ * Extrai a chave (key) de uma URL do R2/Cloudflare Storage
+ * Exemplo: https://xxx.r2.cloudflarestorage.com/bucket/12345678000190/xml/12345678901234567890123456789012345678901234.xml
  * Retorna: 12345678000190/xml/12345678901234567890123456789012345678901234.xml
  */
 export function extractKeyFromStorageUrl(url: string): string | null {
@@ -38,9 +38,9 @@ export function extractKeyFromStorageUrl(url: string): string | null {
 }
 
 /**
- * Lê o conteúdo de um XML, seja do sistema de arquivos local ou do Contabo Storage
+ * Lê o conteúdo de um XML, seja do sistema de arquivos local ou do R2/Cloudflare Storage
  * 
- * @param filepath - Caminho local ou URL do Contabo
+ * @param filepath - Caminho local ou URL do R2
  * @returns Conteúdo do XML como string ou null se não encontrado
  */
 export async function readXmlContent(filepath: string): Promise<string | null> {
@@ -58,7 +58,7 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
       const keyParts = key.split('/');
       if (keyParts.length >= 2) {
         const cnpjFromKey = keyParts[0];
-        console.log(`[Contabo Storage] Lendo XML do CNPJ: ${cnpjFromKey} (key: ${key})`);
+        console.log(`[R2 Storage] Lendo XML do CNPJ: ${cnpjFromKey} (key: ${key})`);
       }
       
       const buffer = await getFile(key);
@@ -82,7 +82,7 @@ export async function readXmlContent(filepath: string): Promise<string | null> {
 /**
  * Lê o conteúdo de um XML como Buffer
  * 
- * @param filepath - Caminho local ou URL do Contabo
+ * @param filepath - Caminho local ou URL do R2
  * @returns Conteúdo do XML como Buffer ou null se não encontrado
  */
 export async function readXmlBuffer(filepath: string): Promise<Buffer | null> {

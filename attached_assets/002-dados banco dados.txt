@@ -1,0 +1,15 @@
+dados banco developer
+database_url = postgresql://neondb_owner:npg_c7Y4pguszbLQ@ep-polished-dew-afjp84iw.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require
+pgdatabase = neondb
+pghost = ep-polished-dew-afjp84iw.c-2.us-west-2.aws.neon.tech
+pgport = 5432
+pguser = neondb_owner
+pgpassword = npg_c7Y4pguszbLQ
+
+
+dados banco production
+database_url = postgresql://neondb_owner:npg_Gj29eiMXtToq@ep-damp-poetry-aeounpgw.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require
+pgdatabase = neondb
+pghost = ep-damp-poetry-aeounpgw.c-2.us-east-2.aws.neon.tech
+pguser = neondb_owner
+pgpassword = npg_Gj29eiMXtToq
